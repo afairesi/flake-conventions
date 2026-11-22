@@ -5,6 +5,7 @@ import curses
 import json
 import os
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, call
 
@@ -14,7 +15,7 @@ import afairesi
 import afairesi_tui as subject
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 
@@ -166,10 +167,9 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
     expect([path.read_bytes() for path in paths] == before, "inspection modified files")
 
 
-def test_multilingual_test_names_are_searchable_and_diffed_under_their_packages(
-    home: Path,
-) -> None:
-    """Follow test names through the tree, search and diff views."""
+@pytest.fixture
+def mixed_language_checkout(home: Path) -> Path:
+    """Stage Bats, Nix, Lean and Rust suites in one checkout."""
     checkout = home / "github.com/owner/project"
     suites = {
         "shell": (
@@ -206,6 +206,14 @@ def test_multilingual_test_names_are_searchable_and_diffed_under_their_packages(
         '[package]\nname = "crate"\nversion = "0.1.0"\n'
     )
     git(checkout, "add", "--", *suites)
+    return checkout
+
+
+@pytest.mark.usefixtures("mixed_language_checkout")
+def test_bats_nix_lean_and_rust_test_names_are_searchable_under_their_packages(
+    home: Path,
+) -> None:
+    """Search each suite's displayed name and select it under its package."""
     cache = home.parent / "cache"
     tree = subject.build_tree(home, cache=cache)
     viewer = subject.Viewer(tree)
@@ -233,6 +241,14 @@ def test_multilingual_test_names_are_searchable_and_diffed_under_their_packages(
         frame,
     )
 
+
+def test_added_and_removed_test_names_remain_visible_under_their_packages(
+    home: Path, mixed_language_checkout: Path
+) -> None:
+    """Keep additions and removals searchable even when a whole package disappears."""
+    checkout = mixed_language_checkout
+    cache = home.parent / "cache"
+    project = ("github.com", "owner", "project")
     subject.cached_output(checkout, "diff", cache, refresh=False)
     (checkout / "shell/test_main.bats").write_text(
         '@test "preserves tabs" { true; }\n@test "accepts blanks" { true; }\n'
@@ -383,7 +399,7 @@ def test_views_are_reloaded_when_the_cache_is_damaged_or_unavailable(
     expect(not hit and actual == expected, actual)
 
 
-def test_test_name_cache_only_stores_successful_reads_of_unchanged_sources(
+def test_the_next_inspection_retries_failed_or_unstable_results(
     checkout: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Retry errors and avoid persisting a result read while the source was changing."""
@@ -404,6 +420,9 @@ def test_test_name_cache_only_stores_successful_reads_of_unchanged_sources(
     monkeypatch.setattr(afairesi, "inspect_repository", changing)
     subject.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "changing source was cached")
+    monkeypatch.setattr(afairesi, "inspect_repository", original)
+    current, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
+    expect(not hit and current == {"example": ["test_changed"]}, current)
 
 
 def test_test_name_cache_refreshes_when_a_symlink_target_changes(
@@ -422,7 +441,7 @@ def test_test_name_cache_refreshes_when_a_symlink_target_changes(
     expect(not hit and value == {"example": ["test_other"]}, value)
 
 
-def test_viewer_starts_with_folded_directories_and_supports_vim_navigation() -> None:
+def test_directories_start_collapsed_and_can_be_expanded_with_the_keyboard() -> None:
     """Show meaningful labels and let h/l fold and unfold details without JSON noise."""
     root = subject.Node("/home/test", expanded=True)
     project = root.add("github.com").add("owner").add("project")
@@ -518,7 +537,7 @@ def screen_fixture(monkeypatch: pytest.MonkeyPatch) -> Mock:
 @pytest.mark.parametrize(
     ("palette", "modified"), [(1 << 24, 0xFF8700), (256, 208), (8, curses.COLOR_YELLOW)]
 )
-def test_browse_highlights_selected_changes_with_the_terminal_palette(
+def test_selected_additions_and_removals_keep_their_colors_when_highlighted(
     screen: Mock, monkeypatch: pytest.MonkeyPatch, palette: int, modified: int
 ) -> None:
     """Keep addition and removal colors visible when either row is selected."""
@@ -556,24 +575,55 @@ def test_browse_highlights_selected_changes_with_the_terminal_palette(
         expect(styles == {color, color | curses.A_BOLD | curses.A_UNDERLINE}, styles)
 
 
-def test_browse_refreshes_both_views_and_preserves_navigation(screen: Mock) -> None:
-    """Allow r in searches and keep the matching branch expanded on refresh."""
-    screen.get_wch.side_effect = ["d", "j", "/", "r", "\n", "r", "d", "r", "q"]
-    calls = []
+def test_refresh_shows_current_tests_and_diffs_and_keeps_the_selected_test(
+    screen: Mock,
+) -> None:
+    """Follow the highlight as rows move, then remove the selected test."""
+    tree = subject.Node("home", expanded=True)
+    tree.add("package").add("result")
+    updated = subject.Node("home", expanded=True)
+    updated.add("another package")
+    updated.add("package").add("result")
+    tests = subject.Node("current tests", expanded=True)
+    tests.add("obsolete test")
+    empty = subject.Node("no remaining tests")
+    results = {"diff": iter([tree, updated]), "tests": iter([tests, empty])}
+    screen.erase.side_effect = screen.addnstr.reset_mock
 
-    def load(
-        view: subject.View, _report: Callable[[subject.Progress], None]
-    ) -> subject.Node:
-        calls.append(view)
-        tree = subject.Node("home", expanded=True)
-        tree.add("group").add(f"generation {len(calls)}")
-        return tree
+    def selected_label() -> str:
+        rows = screen.addnstr.call_args_list[:-1]
+        (label,) = [
+            str(row.args[2]).strip() for row in rows if row.args[4] & curses.A_REVERSE
+        ]
+        return label
 
-    subject.browse(screen, subject.Node("home"), "tests", load)
-    expect(calls == ["diff", "diff", "tests", "tests"], calls)
-    lines = [args.args[2] for args in screen.addnstr.call_args_list]
-    expect("/r" in lines and any("r refresh" in line for line in lines), lines)
-    expect("      generation 2" in lines, lines)
+    def keys() -> Iterator[str]:
+        footer = screen.addnstr.call_args.args[2]
+        expect("r refresh" in footer, footer)
+        yield "d"
+        yield "/"
+        yield "r"
+        expect(screen.addnstr.call_args.args[2] == "/r", screen.addnstr.call_args)
+        yield "\n"
+        yield "r"
+        rows = screen.addnstr.call_args_list
+        expect(any(row.args[2].strip() == "another package" for row in rows), rows)
+        expect(selected_label() == "result", rows)
+        yield "d"
+        expect(selected_label() == "▾ current tests", screen.addnstr.call_args_list)
+        yield "j"
+        expect(selected_label() == "obsolete test", screen.addnstr.call_args_list)
+        yield "r"
+        expect(selected_label() == "no remaining tests", screen.addnstr.call_args_list)
+        yield "q"
+
+    screen.get_wch.side_effect = keys()
+    subject.browse(
+        screen,
+        subject.Node("initial tests"),
+        "tests",
+        lambda view, _report: next(results[view]),
+    )
 
 
 def test_switching_to_diff_shows_repository_progress_until_the_view_is_ready(
@@ -609,16 +659,29 @@ def test_switching_to_diff_shows_repository_progress_until_the_view_is_ready(
     )
 
 
-def test_viewer_refresh_keeps_an_expanded_selection_when_rows_move() -> None:
-    """Match selected rows by their tree location and clamp after removals."""
-    root = subject.Node("home", expanded=True)
-    root.add("repository").add("field")
-    viewer = subject.Viewer(root)
-    viewer.search("field")
-    updated = subject.Node("home", expanded=True)
-    updated.add("another")
-    updated.add("repository").add("field")
-    viewer.refresh(updated)
-    expect(viewer.frame(10)[-1] == ("      field", True, ""), viewer.frame(10))
-    viewer.refresh(subject.Node("home"))
-    expect(viewer.selected == 0, viewer.selected)
+def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
+    home: Path, screen: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Open the command, type a search and read the selected rule under its package."""
+    checkout = home / "github.com/owner/project"
+    (checkout / "example/test_main.py").write_text(
+        "def test_keeps_saved_notes(): pass\n"
+    )
+    git(checkout, "add", "example/test_main.py")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(home.parent / "cache"))
+    monkeypatch.setattr(sys, "argv", ["afairesi_tui", "--home", str(home)])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(curses, "wrapper", lambda browse, *args: browse(screen, *args))
+    screen.erase.side_effect = screen.addnstr.reset_mock
+    screen.get_wch.side_effect = [*"/saved notes\n", "q"]
+
+    subject.main()
+
+    rows = screen.addnstr.call_args_list
+    labels = [row.args[2].strip() for row in rows]
+    expect("▾ github.com" in labels and "▾ example (1)" in labels, labels)
+    selected = [
+        row.args[2].strip() for row in rows[:-1] if row.args[4] & curses.A_REVERSE
+    ]
+    expect(selected == ["keeps saved notes"], selected)

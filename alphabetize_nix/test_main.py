@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_formatting_nested_bindings_requires_work_proportional_to_source_size(
+def test_nested_bindings_flatten_to_a_dotted_path_within_a_linear_visit_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bound tree visits so small nested inputs cannot trigger exponential work."""

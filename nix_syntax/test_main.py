@@ -8,12 +8,7 @@ from hypothesis import strategies as st
 import nix_syntax
 
 
-@given(
-    st.one_of(
-        st.binary(max_size=4096),
-        st.sampled_from([b"{}", b"[ 1 2 ]", b"let a = 1; in a", b'"${toString 1}"']),
-    ),
-)
+@given(st.binary(max_size=4096))
 def test_parsing_returns_the_original_bytes_or_raises_a_nix_syntax_error(
     source: bytes,
 ) -> None:
@@ -27,6 +22,21 @@ def test_parsing_returns_the_original_bytes_or_raises_a_nix_syntax_error(
 
 
 @pytest.mark.parametrize(
+    "expression", [b"{}", b"[ 1 2 ]", b"let a = 1; in a", b'"${toString 1}"']
+)
+def test_unclosed_nix_expressions_report_the_file_line_and_column_of_the_syntax_error(
+    expression: bytes,
+) -> None:
+    """Keep valid source bytes and locate a syntax error in its incomplete version."""
+    if nix_syntax.parse(expression).source != expression:
+        raise AssertionError(expression)
+    with pytest.raises(
+        nix_syntax.NixSyntaxError, match=r"incomplete\.nix:\d+:\d+: parse error"
+    ):
+        nix_syntax.parse(b"(" + expression, path="incomplete.nix")
+
+
+@pytest.mark.parametrize(
     ("literal", "expected"),
     [
         (r'"café\r\n\${name}"', "café\r\n${name}"),
@@ -35,7 +45,7 @@ def test_parsing_returns_the_original_bytes_or_raises_a_nix_syntax_error(
         ('""', ""),
     ],
 )
-def test_string_value_decodes_only_the_selected_literal(
+def test_quoted_strings_decode_escapes_and_newlines_at_the_selected_source_position(
     literal: str, expected: str
 ) -> None:
     """Read the literal at its UTF-8 byte offset using Nix escape and newline rules."""
@@ -53,3 +63,35 @@ def test_literal_inspection_reads_only_double_quoted_strings_without_interpolati
     document = nix_syntax.parse(source)
     if nix_syntax.string_value(document, document.root) is not None:
         raise AssertionError(source)
+
+
+@pytest.mark.parametrize("value", ['a"b', "a\\b", "\r\n\t", "café", "${name}", ""])
+def test_quoting_a_value_preserves_its_text_and_keeps_interpolation_literal(
+    value: str,
+) -> None:
+    """Encode a string as Nix source and read the same literal back."""
+    document = nix_syntax.parse(nix_syntax.quote_string(value))
+    actual = nix_syntax.string_value(document, document.root)
+    if actual != value:
+        raise AssertionError(actual)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('let a = b; b = "value"; in (a)', '"value"'),
+        ('let a = "outer"; in args: let a = "inner"; in a', '"inner"'),
+        ('let a = "outer"; in a: a', None),
+        ('let a = "outer"; in { a }: a', None),
+        ("let a = b; b = a; in a", None),
+    ],
+)
+def test_package_aliases_resolve_locally_while_parameters_and_cycles_stay_unresolved(
+    source: str, expected: str | None
+) -> None:
+    """Inspect a package result without evaluating its Nix expression."""
+    document = nix_syntax.parse(source)
+    body = nix_syntax.call_package_body(document)
+    actual = None if body is None else document.text(body)
+    if actual != expected:
+        raise AssertionError((source, actual))

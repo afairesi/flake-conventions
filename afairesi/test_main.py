@@ -155,7 +155,7 @@ def _snapshot(root: Path) -> dict[Path, tuple[int, bytes]]:
     return files
 
 
-def test_inspection_lists_sorted_test_names_before_implementation(
+def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_missing(
     root: Path,
 ) -> None:
     """List declarations without importing the suite or requiring an implementation."""
@@ -244,7 +244,9 @@ def test_source_validation_rejects_a_tracked_python_package_initializer(
     _expect(_snapshot(root) == before, "rejection changed sources")
 
 
-def test_source_validation_accepts_builders_in_a_with_scope(root: Path) -> None:
+def test_packages_declared_in_a_with_scope_can_be_listed_without_rewriting_the_source(
+    root: Path,
+) -> None:
     """Validate a package without rewriting its Nix scope."""
     _fixture_add(root, "example", "python")
     definition = root / "example/default.nix"
@@ -255,7 +257,9 @@ def test_source_validation_accepts_builders_in_a_with_scope(root: Path) -> None:
     _git(root, "add", ".")
     before = _snapshot(root)
     inspection_subject.validate_flake_source(root)
-    _expect(_snapshot(root) == before, "validation changed repository")
+    packages = inspection_subject.inspect_repository(root)
+    _expect(list(packages) == ["example"], packages)
+    _expect(_snapshot(root) == before, "inspection changed repository")
 
 
 @pytest.mark.parametrize(
@@ -370,7 +374,7 @@ class AsyncReports(AsyncBase):
     _expect(declared == collected, (declared, collected))
 
 
-def test_specification_preserves_package_names_and_omits_standalone_hosts(
+def test_the_package_list_preserves_declared_names_and_excludes_standalone_hosts(
     root: Path,
 ) -> None:
     """Keep each package's exact spelling in a mixed repository."""
@@ -464,7 +468,7 @@ let options = {
         inspection_subject.validate_flake_source(tmp_path)
 
 
-def test_specification_reports_a_missing_flake_or_malformed_test_suite(
+def test_inspection_reports_a_missing_flake_or_invalid_python_test_source(
     tmp_path: Path,
 ) -> None:
     """Report invalid repositories and malformed source with useful errors."""
@@ -564,7 +568,7 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
         inspection_subject.validate_flake_source(root)
 
 
-def test_diff_errors_clean_up_temporary_sources(
+def test_a_failed_test_name_comparison_removes_its_temporary_snapshots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -679,7 +683,9 @@ def test_source_validation_ignores_untracked_packages_and_test_files(
     )
 
 
-def test_inspection_extracts_named_cases_from_tracked_suites(root: Path) -> None:
+def test_staging_bats_nix_and_lean_suites_lists_their_declared_test_names(
+    root: Path,
+) -> None:
     """Read Bats, Nix, and Lean declarations once their suites are staged."""
     expected = {}
     for kind, suite, source, names in [

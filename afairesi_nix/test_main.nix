@@ -65,7 +65,7 @@ in
     && apps.example.meta == package.meta
     && apps.example.meta.description == "Afairesi consumer contract example"
   );
-  testAppsSupplyADescriptionWhenThePackageHasNone =
+  testAppsWithoutADescriptionUseRunFollowedByThePackageName =
     check "Run example"
       overridden.apps.${system}.example.meta.description;
   testBuildersDeclareTheirPackageKind =
@@ -77,10 +77,6 @@ in
         htmlPackage.afairesiKind
         leanExample.afairesiKind
       ];
-  testChecksIncludeSupportedPackageTests = check true (
-    checks.pkgs-python_native-contract == packages.python_native.passthru.tests.contract
-    && !(overridden.checks.${system} ? pkgs-example-unavailable)
-  );
   testChecksIncludeTheFormatterAndAllPackages = check true (
     checks.formatter == consumer.formatter.${system}.passthru.tests.check
     && pkgs.lib.all (name: checks."pkgs-${name}" == packages.${name}) (builtins.attrNames packages)
@@ -113,7 +109,7 @@ in
   testEveryPackageSystemHasAFormatter = check (builtins.attrNames consumer.packages) (
     builtins.attrNames consumer.formatter
   );
-  testExecutablesExposeTheirPackageName =
+  testExecutablePackagesUseTheirPackageNameAsTheMainProgram =
     check
       [ "example" "lean-example" ]
       [
@@ -142,7 +138,7 @@ in
         host.pkgs.afairesiContract
         host.config.networking.hostName
       ];
-  testHtmlPackagesKeepTheirDescription = check "Source listing" htmlPackage.meta.description;
+  testHtmlPackagesPreserveTheSuppliedDescription = check "Source listing" htmlPackage.meta.description;
   testLibrariesHaveNoMainProgram =
     check
       [ false false ]
@@ -180,6 +176,10 @@ in
     allowUnfree = true;
     cudaSupport = true;
   } package.consumerConfig;
+  testPackageChecksExposeSupportedPassthruTestsAndOmitUnavailableOnes = check true (
+    checks.pkgs-python_native-contract == packages.python_native.passthru.tests.contract
+    && !(overridden.checks.${system} ? pkgs-example-unavailable)
+  );
   testPackagesWithTestEnvironmentsExposeShells = check [
     "bash-example-test"
     "example-test"
@@ -220,11 +220,12 @@ in
         (checks ? nix-untested)
         (checks ? python_native)
       ];
-  testUnavailablePackagesAreOmitted =
+  testUnsupportedPackagesAreAbsentFromBothPackagesAndChecks =
     check
-      [ false false ]
+      [ false false false ]
       [
         (packages ? unavailable)
         (checks ? unavailable)
+        (checks ? pkgs-unavailable)
       ];
 }
