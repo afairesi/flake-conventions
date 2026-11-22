@@ -2,7 +2,7 @@
 inputs.self.lib.mkPythonPackage {
   inherit pkgs;
   executable = true;
-  meta.description = "Browse package test names and their diffs in a cached, expandable terminal tree.";
+  meta.description = "Browse packages, test names, and their changes across Git submodules.";
   propagatedBuildInputs = [
     inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.project_layout
     pkgs.python3Packages.tree-sitter-language-pack

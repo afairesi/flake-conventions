@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Browse package test names and their changes across home's direct submodules."""
+"""Browse packages and named tests across the home repository's direct submodules."""
 
 # ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
 
@@ -68,7 +68,7 @@ def _path_stamp(path: Path) -> bytes:
 
 
 def fingerprint(root: Path, view: View) -> str | None:
-    """Track the specification inputs in the index and working tree."""
+    """Track the test inventory inputs in the index and working tree."""
     try:
         files = test_inventory.diff_inputs(root)
     except ValueError:
@@ -294,7 +294,7 @@ def build_tree(
     tree = _directory_tree(home, repositories_by_path)
     if not tree.children:
         tree.add(
-            "No test specification changes"
+            "No package or test-name changes"
             if view == "diff"
             else "No direct registered submodules."
         )
@@ -662,7 +662,7 @@ def main() -> None:
         "command",
         nargs="?",
         choices=["diff"],
-        help="show test name changes across registered home repositories",
+        help="show package and test-name changes in direct submodules",
     )
     parser.add_argument(
         "--home",

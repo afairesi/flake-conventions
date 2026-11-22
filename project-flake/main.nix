@@ -129,6 +129,26 @@ let
         });
       };
     };
+  layoutCheck =
+    { pkgs, src }:
+    let
+      python = pkgs.python3.withPackages (_: [
+        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.project_layout
+      ]);
+    in
+    pkgs.runCommand "afairesi-layout-check" { } ''
+      ${python}/bin/python - "${src}" <<'PY'
+      import sys
+      from pathlib import Path
+      from project_layout import validate_flake_source
+
+      try:
+          validate_flake_source(Path(sys.argv[1]).resolve())
+      except (OSError, SyntaxError, ValueError) as error:
+          sys.exit(f"error: {error}")
+      PY
+      touch "$out"
+    '';
   leanFmt =
     { pkgs }:
     pkgs.leanPackages.buildLakePackage {
@@ -489,7 +509,7 @@ let
                   inherit self;
                   pkgs = packageSets.${system};
                 }).passthru.tests.check;
-              structure = sourceCheck {
+              structure = layoutCheck {
                 pkgs = packageSets.${system};
                 src = source;
               };
@@ -1070,7 +1090,7 @@ let
         passthru.tests.check =
           pkgs.runCommandLocal "treefmt-check"
             {
-              meta.description = "Check the project tree with treefmt";
+              meta.description = "Check the flake source tree with treefmt";
               nativeBuildInputs = [
                 pkgs.git
                 pkgs.git-lfs
@@ -1129,7 +1149,7 @@ let
 
         @pytest.hookimpl(tryfirst=True)
         def pytest_load_initial_conftests() -> None:
-            """Set reproducible Hypothesis defaults before loading project tests."""
+            """Set reproducible Hypothesis defaults before loading package tests."""
             settings.register_profile("afairesi", max_examples=100, derandomize=True)
             settings.load_profile("afairesi")
 
@@ -1212,26 +1232,6 @@ let
       '';
   ruffTarget =
     pkgs: "--target-version=py${builtins.replaceStrings [ "." ] [ "" ] pkgs.python3.pythonVersion}";
-  sourceCheck =
-    { pkgs, src }:
-    let
-      python = pkgs.python3.withPackages (_: [
-        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.project_layout
-      ]);
-    in
-    pkgs.runCommand "afairesi-structure-check" { } ''
-      ${python}/bin/python - "${src}" <<'PY'
-      import sys
-      from pathlib import Path
-      from project_layout import validate_flake_source
-
-      try:
-          validate_flake_source(Path(sys.argv[1]).resolve())
-      except (OSError, SyntaxError, ValueError) as error:
-          sys.exit(f"error: {error}")
-      PY
-      touch "$out"
-    '';
 in
 {
   inherit lint;

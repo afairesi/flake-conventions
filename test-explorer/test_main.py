@@ -345,7 +345,7 @@ def test_home_tree_requires_a_git_root_and_accepts_one_without_submodules(
         tree,
     )
     differences = subject.build_tree(tmp_path, cache=cache, view="diff")
-    expect(labels(differences) == ["No test specification changes"], differences)
+    expect(labels(differences) == ["No package or test-name changes"], differences)
     child = tmp_path / "directory"
     child.mkdir()
     with pytest.raises(ValueError, match="repository root"):
@@ -794,7 +794,7 @@ def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_mi
     )
 
 
-def test_each_package_lists_a_shared_behavior_name_once(root: Path) -> None:
+def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
     """Keep equal identifiers distinct across packages and unique within a suite."""
     for name in ("mail_box", "mail-box"):
         _fixture_add(root, name, "python")
@@ -1075,12 +1075,12 @@ def _indexed_repository(root: Path) -> None:
     git(root, "add", ".")
 
 
-def _write_test(root: Path, behavior: str) -> None:
+def _write_test(root: Path, name: str) -> None:
     """Give the fixture's sole Python test a new name."""
-    (root / "example/test_main.py").write_text(f"def test_{behavior}(): pass\n")
+    (root / "example/test_main.py").write_text(f"def test_{name}(): pass\n")
 
 
-def test_diff_ignores_implementation_edits_and_untracked_resources(
+def test_diff_ignores_implementation_edits_and_untracked_packages(
     tmp_path: Path,
 ) -> None:
     """Only changes to the package-to-test-name mapping produce output."""
@@ -1248,7 +1248,7 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     )
 
 
-def test_source_validation_ignores_untracked_packages_and_test_files(
+def test_layout_check_ignores_untracked_packages_and_test_files(
     root: Path,
 ) -> None:
     """Skip malformed local declarations and suites until they are tracked."""

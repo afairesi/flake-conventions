@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Check project layout and source validation."""
+"""Test the flake layout check."""
 
 import os
 import re
@@ -45,10 +45,10 @@ def _git(root: Path, *arguments: str) -> str:
 
 
 @pytest.mark.parametrize("exported", [False, True], ids=["git", "export"])
-def test_source_validation_skips_nested_assets_without_running_package_code(
+def test_layout_check_skips_nested_assets_without_running_package_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, exported: bool
 ) -> None:
-    """Validate resource files without executing code or traversing nested assets."""
+    """Check package files without executing code or traversing nested assets."""
     repository = _repository(tmp_path)
     _add_example(repository, python=True)
     (repository / "example/main.py").write_text(
@@ -118,7 +118,7 @@ def _snapshot(root: Path) -> dict[Path, tuple[int, bytes]]:
     return files
 
 
-def test_source_validation_rejects_a_tracked_python_package_initializer(
+def test_layout_check_rejects_a_tracked_python_package_initializer(
     root: Path,
 ) -> None:
     """Reject a selected initializer without changing source or installing over main."""
@@ -136,7 +136,7 @@ def test_source_validation_rejects_a_tracked_python_package_initializer(
     "relative",
     ["flake.nix", "example/default.nix", "example/main.nix", "example/test_main.nix"],
 )
-def test_source_validation_identifies_the_file_with_invalid_nix_syntax(
+def test_layout_check_identifies_the_file_with_invalid_nix_syntax(
     root: Path, relative: str
 ) -> None:
     """Report syntax errors in tracked flake, package, source, and test files."""

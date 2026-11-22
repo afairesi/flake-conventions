@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Read declared behavioral names from Bats, Nix and Lean test suites."""
+"""Read test names from Bats, Nix and Lean test suites."""
 
 # ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
 

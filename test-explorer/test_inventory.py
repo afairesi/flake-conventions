@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Inspect and compare the named tests in tracked project packages."""
+"""Collect and compare package names and the test names declared by each package."""
 
 # ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from test_explorer.rust import cargo_names
-from test_explorer.specification import bats_names, lean_names, nix_names
+from test_explorer.test_names import bats_names, lean_names, nix_names
 
 import project_layout
 

@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Discover project packages and validate their source layout."""
+"""Discover package declarations and check the layout of a flake source tree."""
 
 # ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
 
@@ -111,23 +111,23 @@ def _package_kind(document: nix_syntax.Document) -> str:
     return "generic"
 
 
-def _resource_definitions(root: Path, paths: set[Path], filename: str) -> list[Path]:
-    """Select declarations directly under top-level resource directories."""
-    definitions = []
+def _find_declarations(root: Path, paths: set[Path], filename: str) -> list[Path]:
+    """Find declarations with the given filename in top-level directories."""
+    declarations = []
     for path in paths:
         if path.name != filename or len(path.parent.parts) != 1:
             continue
-        definition = root / path
-        if not definition.parent.is_symlink() and definition.parent.is_dir():
-            definitions.append(definition)
-    return sorted(definitions)
+        declaration = root / path
+        if not declaration.parent.is_symlink() and declaration.parent.is_dir():
+            declarations.append(declaration)
+    return sorted(declarations)
 
 
 def detect_packages(root: Path, paths: set[Path]) -> tuple[list[Package], list[Path]]:
     """Read package declarations and identify tracked declarations missing on disk."""
     result = []
     missing = []
-    for path in _resource_definitions(root, paths, "default.nix"):
+    for path in _find_declarations(root, paths, "default.nix"):
         source = read_regular(path)
         relative = path.relative_to(root)
         if source is None:
@@ -161,13 +161,11 @@ def validate_python_package_names(packages: list[Package]) -> None:
         modules[module] = name
 
 
-def _structure_issues(
-    root: Path, packages: list[Package], paths: set[Path]
-) -> list[str]:
-    """Check tracked resource files for layout and Python source errors."""
+def _layout_issues(root: Path, packages: list[Package], paths: set[Path]) -> list[str]:
+    """Check tracked package and host files, including Python entry points."""
     issues: list[str] = []
     conventional = {Path(item) for item in ROOT_FILES}
-    for config in _resource_definitions(root, paths, "configuration.nix"):
+    for config in _find_declarations(root, paths, "configuration.nix"):
         if config.is_file():
             relative = config.relative_to(root)
             conventional.update(
@@ -336,11 +334,11 @@ def _python_entrypoint(
 
 
 def validate_flake_source(root: Path) -> None:
-    """Validate a Git-filtered flake source without requiring Git metadata."""
+    """Check the flake layout in a Git checkout or an exported source tree."""
     paths = source_paths(root)
     packages, missing = detect_packages(root, paths)
     validate_python_package_names(packages)
-    issues = _structure_issues(root, packages, paths)
+    issues = _layout_issues(root, packages, paths)
     issues.extend(f"{path}: missing required tracked regular file" for path in missing)
     flake = read_regular(root / "flake.nix")
     if flake is not None:
