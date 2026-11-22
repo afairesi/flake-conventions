@@ -36,7 +36,7 @@ let
             command = pkgs.writeShellApplication {
               name = "format-nix";
               runtimeInputs = [
-                afairesiInputs.self.packages.${system}.alphabetize_nix
+                afairesiInputs.self.packages.${system}.normalize-nix-bindings
                 afairesiInputs.self.packages.${system}.uncomment
                 pkgs.coreutils
                 pkgs.diffutils
@@ -53,7 +53,7 @@ let
                   cp "$source" "$temporary"
                   nixfmt - < "$temporary" > /dev/null
                   uncomment --config ${pkgs.writeText "uncomment.toml" ""} --no-gitignore "$temporary"
-                  alphabetize_nix "$temporary"
+                  normalize-nix-bindings "$temporary"
                   nixfmt "$temporary"
                   if ! cmp -s "$source" "$temporary"; then
                     cat "$temporary" > "$source"
@@ -1216,14 +1216,14 @@ let
     { pkgs, src }:
     let
       python = pkgs.python3.withPackages (_: [
-        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.afairesi
+        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.project_layout
       ]);
     in
     pkgs.runCommand "afairesi-structure-check" { } ''
       ${python}/bin/python - "${src}" <<'PY'
       import sys
       from pathlib import Path
-      from afairesi import validate_flake_source
+      from project_layout import validate_flake_source
 
       try:
           validate_flake_source(Path(sys.argv[1]).resolve())

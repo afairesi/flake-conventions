@@ -231,7 +231,7 @@ def main() -> None:
     """Sort and format expressions in selected Nix files in place."""
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Example: alphabetize_nix flake.nix */default.nix",
+        epilog="Example: normalize-nix-bindings flake.nix */default.nix",
     )
     parser.add_argument(
         "files",

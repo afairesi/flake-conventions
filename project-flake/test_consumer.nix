@@ -115,10 +115,13 @@ pkgs.runCommand "afairesi-consumer-contract"
     mkdir native-source
     cp -R ${consumerSource}/{bash-example,example,lean-example,nix-library,python_native,rust-native} native-source/
     touch native-source/{flake.nix,flake.lock}
-    test ! -e ${inputs.self.packages.${system}.afairesi}/bin/afairesi
-    ${(pkgs.python3.withPackages (_: [ inputs.self.packages.${system}.afairesi ]))}/bin/python - <<'PY'
+    test ! -e ${inputs.self.packages.${system}.project_layout}/bin/project_layout
+    ${
+      (pkgs.python3.withPackages (_: [ inputs.self.packages.${system}.test-explorer ]))
+    }/bin/python - <<'PY'
     from pathlib import Path
-    from afairesi import inspect_repository, validate_flake_source
+    from project_layout import validate_flake_source
+    from test_explorer.test_inventory import inspect_repository
 
     root = Path("native-source").resolve()
     validate_flake_source(root)

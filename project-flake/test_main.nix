@@ -54,12 +54,6 @@ let
   shells = consumer.devShells.${system};
 in
 {
-  testAfairesiIsTheDefaultLibraryAndTheTuiIsASeparateExecutable = check true (
-    !(inputs.self.apps.${system} ? afairesi)
-    && !(inputs.self.packages.${system}.afairesi.meta ? mainProgram)
-    && inputs.self.packages.${system}.afairesi_tui.meta.mainProgram == "afairesi_tui"
-    && inputs.self.packages.${system}.default == inputs.self.packages.${system}.afairesi
-  );
   testAppsExposePackageMetadata = check true (
     apps.example.type == "app"
     && apps.example.meta == package.meta
@@ -186,6 +180,12 @@ in
     "lean-example-test"
     "test_main-test"
   ] (builtins.attrNames shells);
+  testProjectLayoutIsTheDefaultLibraryAndTestExplorerIsASeparateExecutable = check true (
+    !(inputs.self.apps.${system} ? project_layout)
+    && !(inputs.self.packages.${system}.project_layout.meta ? mainProgram)
+    && inputs.self.packages.${system}.test-explorer.meta.mainProgram == "test-explorer"
+    && inputs.self.packages.${system}.default == inputs.self.packages.${system}.project_layout
+  );
   testPythonBuilderRequiresImportableModuleNames = check false (
     accepts { src = "/invalid/123"; } || accepts { src = "/invalid/class"; }
   );

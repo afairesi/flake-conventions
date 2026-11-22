@@ -9,14 +9,14 @@
   outputs =
     inputs:
     let
-      inherit ((import ./afairesi_nix/main.nix inputs)) lib;
+      inherit ((import ./project-flake/main.nix inputs)) lib;
       flake = lib.mkFlake { inherit inputs; };
     in
     flake
     // {
       inherit lib;
       packages = builtins.mapAttrs (
-        _: packages: packages // { default = packages.afairesi; }
+        _: packages: packages // { default = packages.project_layout; }
       ) flake.packages;
     };
 }

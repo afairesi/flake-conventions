@@ -21,7 +21,9 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import afairesi
+from test_explorer import test_inventory
+
+import project_layout
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -35,7 +37,7 @@ type View = Literal["tests", "diff"]
 READ_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
-type Payload = dict[str, list[str]] | list[afairesi.PackageChange]
+type Payload = dict[str, list[str]] | list[test_inventory.PackageChange]
 
 
 def _path_stamp(path: Path) -> bytes:
@@ -68,7 +70,7 @@ def _path_stamp(path: Path) -> bytes:
 def fingerprint(root: Path, view: View) -> str | None:
     """Track the specification inputs in the index and working tree."""
     try:
-        files = afairesi.diff_inputs(root)
+        files = test_inventory.diff_inputs(root)
     except ValueError:
         return None
     digest = hashlib.sha256()
@@ -89,21 +91,23 @@ def fingerprint(root: Path, view: View) -> str | None:
 
 def repositories(home: Path) -> list[str]:
     """Join .gitmodules paths with gitlinks in the current home index."""
-    root = afairesi.git(home, "rev-parse", "--show-toplevel").strip()
+    root = project_layout.git(home, "rev-parse", "--show-toplevel").strip()
     if Path(root).resolve() != home:
         message = "The selected home must be a Git repository root."
         raise ValueError(message)
     modules = home / ".gitmodules"
     if not modules.is_file():
         return []
-    configured = afairesi.git(home, "config", "list", "--null", "--file", str(modules))
+    configured = project_layout.git(
+        home, "config", "list", "--null", "--file", str(modules)
+    )
     paths = set()
     for entry in configured.split("\0"):
         key, _, value = entry.partition("\n")
         if key.startswith("submodule.") and key.endswith(".path"):
             paths.add(value)
     result = []
-    for mode, _oid, stage, path in afairesi.index_entries(home):
+    for mode, _oid, stage, path in test_inventory.index_entries(home):
         if mode != "160000" or stage != "0" or path not in paths:
             continue
         location = (home / path).resolve()
@@ -156,7 +160,7 @@ def cached_output(
 ) -> tuple[Payload, bool]:
     """Cache stable inspections and tolerate unavailable cache storage."""
     key = hashlib.sha256(
-        json.dumps([CACHE_VERSION, str(root), view, afairesi.__file__]).encode()
+        json.dumps([CACHE_VERSION, str(root), view, test_inventory.__file__]).encode()
     ).hexdigest()
     path = cache / f"{key}.json"
     before = fingerprint(root, view)
@@ -170,9 +174,9 @@ def cached_output(
             ):
                 return saved["value"], True
     value = (
-        afairesi.inspect_repository(root)
+        test_inventory.inspect_repository(root)
         if view == "tests"
-        else afairesi.diff_repository(root)
+        else test_inventory.diff_repository(root)
     )
     if before is not None and fingerprint(root, view) == before:
         _write_cache_entry(path, {"fingerprint": before, "value": value})
@@ -199,7 +203,9 @@ def _repository_node(
             message = "This submodule is not initialized."
             raise ValueError(message)
         if (
-            Path(afairesi.git(root, "rev-parse", "--show-toplevel").strip()).resolve()
+            Path(
+                project_layout.git(root, "rev-parse", "--show-toplevel").strip()
+            ).resolve()
             != root
         ):
             message = "The registered path is not a repository checkout within home."
@@ -207,7 +213,7 @@ def _repository_node(
         value, hit = cached_output(root, view, cache, refresh=refresh)
         if isinstance(value, dict):
             packages = value
-            status = afairesi.git(
+            status = project_layout.git(
                 root,
                 "status",
                 "--porcelain",
@@ -351,7 +357,7 @@ def _directory_tree(home: Path, repositories_by_path: dict[str, Node]) -> Node:
 def add_tests(
     node: Node,
     packages: dict[str, list[str]] | None,
-    changes: Sequence[afairesi.PackageChange] = (),
+    changes: Sequence[test_inventory.PackageChange] = (),
 ) -> None:
     """Mark changed tests and include current tests and counts in the tests view."""
     names = {
@@ -673,7 +679,7 @@ def main() -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         parser.error("an interactive terminal is required")
     try:
-        cache = _cache_home() / "afairesi_tui"
+        cache = _cache_home() / "test-explorer"
 
         load = partial(build_tree, options.home, cache=cache, refresh=options.refresh)
         view: View = options.command or "tests"

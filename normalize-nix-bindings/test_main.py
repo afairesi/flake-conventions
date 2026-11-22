@@ -7,11 +7,10 @@ import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
+import normalize_nix_bindings as alphabetize
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-import alphabetize_nix as alphabetize
 
 if TYPE_CHECKING:
     from pathlib import Path
