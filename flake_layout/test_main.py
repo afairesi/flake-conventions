@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import flake_layout
 import nix_syntax
-import project_layout
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -74,10 +74,10 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
         return original(path)
 
     monkeypatch.setattr(os, "scandir", guarded)
-    sources = project_layout.source_paths(repository)
+    sources = flake_layout.source_paths(repository)
     _expect(Path("example/default.nix") in sources, sources)
     _expect(Path("example/assets/default.nix") not in sources, sources)
-    project_layout.validate_flake_source(repository)
+    flake_layout.validate_flake_source(repository)
 
 
 def _expect(condition: bool, detail: object) -> None:  # noqa: FBT001
@@ -128,7 +128,7 @@ def test_layout_check_rejects_a_tracked_python_package_initializer(
     _git(root, "add", "example/__init__.py")
     before = _snapshot(root)
     with pytest.raises(ValueError, match=r"__init__\.py: reserved"):
-        project_layout.validate_flake_source(root)
+        flake_layout.validate_flake_source(root)
     _expect(_snapshot(root) == before, "rejection changed sources")
 
 
@@ -146,4 +146,4 @@ def test_layout_check_identifies_the_file_with_invalid_nix_syntax(
     with pytest.raises(
         nix_syntax.NixSyntaxError, match=rf"{re.escape(relative)}:\d+:\d+: parse error"
     ):
-        project_layout.validate_flake_source(root)
+        flake_layout.validate_flake_source(root)

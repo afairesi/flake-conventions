@@ -133,14 +133,14 @@ let
     { pkgs, src }:
     let
       python = pkgs.python3.withPackages (_: [
-        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.project_layout
+        afairesiInputs.self.packages.${pkgs.stdenv.hostPlatform.system}.flake_layout
       ]);
     in
     pkgs.runCommand "afairesi-layout-check" { } ''
       ${python}/bin/python - "${src}" <<'PY'
       import sys
       from pathlib import Path
-      from project_layout import validate_flake_source
+      from flake_layout import validate_flake_source
 
       try:
           validate_flake_source(Path(sys.argv[1]).resolve())

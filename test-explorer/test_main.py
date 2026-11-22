@@ -16,7 +16,7 @@ import pytest
 import test_explorer as subject
 from test_explorer import test_inventory
 
-import project_layout
+import flake_layout
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -787,10 +787,11 @@ def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_mi
         "def test_delivers_messages(): assert deliver('hello') == 'hello'\n"
     )
     git(root, "add", "--", "inbox/test_main.py")
-    report = test_inventory.inspect_repository(root)
+    inventory = test_inventory.inspect_repository(root)
     expect(
-        report == {"inbox": ["test_delivers_messages", "test_preserves_message_case"]},
-        report,
+        inventory
+        == {"inbox": ["test_delivers_messages", "test_preserves_message_case"]},
+        inventory,
     )
 
 
@@ -801,13 +802,14 @@ def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
         tests = root / name / "test_main.py"
         tests.write_text("def test_delivers(): ...\ndef test_delivers(): ...\n")
         git(root, "add", "--", f"{name}/test_main.py")
-    report = test_inventory.inspect_repository(root)
-    expect(list(report) == ["mail-box", "mail_box"], report)
+    inventory = test_inventory.inspect_repository(root)
+    expect(list(inventory) == ["mail-box", "mail_box"], inventory)
     expect(
-        report == {"mail-box": ["test_delivers"], "mail_box": ["test_delivers"]}, report
+        inventory == {"mail-box": ["test_delivers"], "mail_box": ["test_delivers"]},
+        inventory,
     )
     with pytest.raises(ValueError, match="module names collide"):
-        project_layout.validate_flake_source(root)
+        flake_layout.validate_flake_source(root)
 
 
 @pytest.mark.parametrize(
@@ -839,13 +841,13 @@ def test_declared_package_kind_determines_the_required_entrypoint(
         (package / filename).write_text(content)
     (package / "main.nix").touch()
     git(root, "add", "--", "example")
-    report = test_inventory.inspect_repository(root)
-    expect(report == {"example": []}, report)
-    project_layout.validate_flake_source(root)
+    inventory = test_inventory.inspect_repository(root)
+    expect(inventory == {"example": []}, inventory)
+    flake_layout.validate_flake_source(root)
     entrypoint, _ = _ENTRYPOINTS[kind]
     (package / entrypoint).unlink()
     with pytest.raises(ValueError, match=re.escape(entrypoint)):
-        project_layout.validate_flake_source(root)
+        flake_layout.validate_flake_source(root)
 
 
 def test_packages_declared_in_a_with_scope_can_be_listed_without_rewriting_the_source(
@@ -853,14 +855,14 @@ def test_packages_declared_in_a_with_scope_can_be_listed_without_rewriting_the_s
 ) -> None:
     """Validate a package without rewriting its Nix scope."""
     _fixture_add(root, "example", "python")
-    definition = root / "example/default.nix"
-    definition.write_text(
+    declaration = root / "example/default.nix"
+    declaration.write_text(
         "{ inputs, pkgs, ... }: with inputs.self.lib; "
         "mkPythonPackage { inherit pkgs; src = ./.; executable = true; }\n"
     )
     git(root, "add", ".")
     before = _snapshot(root)
-    project_layout.validate_flake_source(root)
+    flake_layout.validate_flake_source(root)
     packages = test_inventory.inspect_repository(root)
     expect(list(packages) == ["example"], packages)
     expect(_snapshot(root) == before, "inspection changed repository")
@@ -891,9 +893,9 @@ def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
         for marker in ("main.lean", "ms.tex", "index.html"):
             (package / marker).write_text("Supporting source\n")
     git(root, "add", ".")
-    project_layout.validate_flake_source(root)
-    report = test_inventory.inspect_repository(root)
-    expect(report == {name: ["testBuilds"] for name in builders}, report)
+    flake_layout.validate_flake_source(root)
+    inventory = test_inventory.inspect_repository(root)
+    expect(inventory == {name: ["testBuilds"] for name in builders}, inventory)
 
 
 def test_python_names_match_the_functions_and_methods_collected_by_pytest(
@@ -978,9 +980,9 @@ def test_the_package_list_preserves_declared_names_and_excludes_standalone_hosts
     for kind, name in packages:
         _fixture_add(root, name, kind)
     _fixture_add(root, "workLaptop", "host")
-    project_layout.validate_flake_source(root)
-    report = test_inventory.inspect_repository(root)
-    expect(report == {name: [] for _, name in packages}, report)
+    flake_layout.validate_flake_source(root)
+    inventory = test_inventory.inspect_repository(root)
+    expect(inventory == {name: [] for _, name in packages}, inventory)
 
 
 def _inspection_repository(root: Path) -> None:
@@ -1027,8 +1029,8 @@ def test_library_tests_are_listed_even_when_main_requires_arguments(
     _inspection_repository(tmp_path)
     (tmp_path / "flake.lock").touch()
     package = tmp_path / "example"
-    definition = package / "default.nix"
-    definition.write_text(
+    declaration = package / "default.nix"
+    declaration.write_text(
         """
 { inputs, pkgs, ... }:
 let options = {
@@ -1040,17 +1042,17 @@ let options = {
     )
     source = package / "main.py"
     source.write_text(source.read_text().replace("def main():", "def main(values):"))
-    project_layout.validate_flake_source(tmp_path)
-    report = test_inventory.inspect_repository(tmp_path)["example"]
-    expect(report == ["test_default_output"], report)
-    definition.write_text(
-        definition.read_text().replace("executable = false", "executable = true")
+    flake_layout.validate_flake_source(tmp_path)
+    names = test_inventory.inspect_repository(tmp_path)["example"]
+    expect(names == ["test_default_output"], names)
+    declaration.write_text(
+        declaration.read_text().replace("executable = false", "executable = true")
     )
     with pytest.raises(
         ValueError,
         match="main must accept a call without arguments",
     ):
-        project_layout.validate_flake_source(tmp_path)
+        flake_layout.validate_flake_source(tmp_path)
 
 
 def test_inspection_reports_a_missing_flake_or_invalid_python_test_source(
@@ -1150,7 +1152,7 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
         ValueError,
         match=r"shared/default\.nix: missing required tracked regular file",
     ):
-        project_layout.validate_flake_source(root)
+        flake_layout.validate_flake_source(root)
 
 
 def test_a_failed_test_name_comparison_removes_its_temporary_snapshots(
@@ -1260,9 +1262,9 @@ def test_layout_check_ignores_untracked_packages_and_test_files(
     local.mkdir()
     (local / "default.nix").write_text("{ invalid")
     before = _snapshot(root)
-    project_layout.validate_flake_source(root)
-    report = test_inventory.inspect_repository(root)
-    expect(report == {"example": [], "library": []}, report)
+    flake_layout.validate_flake_source(root)
+    inventory = test_inventory.inspect_repository(root)
+    expect(inventory == {"example": [], "library": []}, inventory)
     expect(
         _snapshot(root) == before, "reading untracked sources changed the repository"
     )
@@ -1322,8 +1324,8 @@ end Résultats
     untracked = test_inventory.inspect_repository(root)
     expect(untracked == {kind: [] for kind in expected}, untracked)
     git(root, "add", "--", *expected)
-    report = test_inventory.inspect_repository(root)
-    expect(report == expected, report)
+    inventory = test_inventory.inspect_repository(root)
+    expect(inventory == expected, inventory)
 
 
 def test_cargo_lists_tests_from_enabled_targets_and_their_module_trees(

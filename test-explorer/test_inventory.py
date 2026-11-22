@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 from test_explorer.rust import cargo_names
 from test_explorer.test_names import bats_names, lean_names, nix_names
 
-import project_layout
+import flake_layout
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -23,7 +23,7 @@ TEST_READERS = {
     "bash": bats_names,
     "generic": nix_names,
     "lean4": lean_names,
-    "python": project_layout.python_suite_names,
+    "python": flake_layout.python_test_names,
 }
 
 
@@ -44,15 +44,15 @@ def inspect_repository(root: Path) -> dict[str, list[str]]:
     if not (root / "flake.nix").is_file():
         message = f"{root}: expected an Afairesi repository with flake.nix"
         raise ValueError(message)
-    paths = project_layout.source_paths(root)
-    packages, _ = project_layout.detect_packages(root, paths)
-    report: dict[str, list[str]] = {}
+    paths = flake_layout.source_paths(root)
+    packages, _ = flake_layout.detect_packages(root, paths)
+    inventory: dict[str, list[str]] = {}
     tracked_rust = None
     for package in packages:
         name = package.root.name
         names: set[str] = set()
         if extract := TEST_READERS.get(package.kind):
-            suite = package.root / project_layout.PACKAGE_TEST_FILES[package.kind]
+            suite = package.root / flake_layout.PACKAGE_TEST_FILES[package.kind]
             if suite.relative_to(root) in paths and suite.is_file():
                 names.update(extract(suite))
         if (
@@ -65,13 +65,13 @@ def inspect_repository(root: Path) -> dict[str, list[str]]:
                     root / source for source in paths if source.suffix == ".rs"
                 }
             names.update(cargo_names(package.root, tracked_rust))
-        report[name] = sorted(names)
-    return report
+        inventory[name] = sorted(names)
+    return inventory
 
 
 def index_entries(root: Path) -> Iterator[tuple[str, str, str, str]]:
     """Yield the mode, object ID, stage, and path of each Git index entry."""
-    for entry in project_layout.git(root, "ls-files", "--stage", "-z").split("\0"):
+    for entry in flake_layout.git(root, "ls-files", "--stage", "-z").split("\0"):
         if entry:
             metadata, name = entry.split("\t", 1)
             mode, oid, stage = metadata.split()
@@ -95,7 +95,7 @@ def diff_inputs(root: Path) -> list[tuple[str, str, Path]]:
     filenames = {
         "default.nix",
         "Cargo.toml",
-        *project_layout.PACKAGE_TEST_FILES.values(),
+        *flake_layout.PACKAGE_TEST_FILES.values(),
     }
     inputs = [
         (mode, oid, path)
@@ -109,7 +109,7 @@ def diff_inputs(root: Path) -> list[tuple[str, str, Path]]:
     return inputs
 
 
-def _inspection_git_report(
+def _snapshot_inventory(
     root: Path,
     files: list[tuple[str, str, Path]],
     *,
@@ -161,8 +161,8 @@ def diff_repository(root: Path) -> list[PackageChange]:
     files = diff_inputs(root)
     if not files:
         return []
-    before = _inspection_git_report(root, files)
-    after = _inspection_git_report(root, files, working_tree=True)
+    before = _snapshot_inventory(root, files)
+    after = _snapshot_inventory(root, files, working_tree=True)
     changes: list[PackageChange] = []
     for package in sorted(before.keys() | after.keys()):
         previous = before.get(package)

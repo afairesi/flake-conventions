@@ -115,18 +115,18 @@ pkgs.runCommand "afairesi-consumer-contract"
     mkdir native-source
     cp -R ${consumerSource}/{bash-example,example,lean-example,nix-library,python_native,rust-native} native-source/
     touch native-source/{flake.nix,flake.lock}
-    test ! -e ${inputs.self.packages.${system}.project_layout}/bin/project_layout
+    test ! -e ${inputs.self.packages.${system}.flake_layout}/bin/flake_layout
     ${
       (pkgs.python3.withPackages (_: [ inputs.self.packages.${system}.test-explorer ]))
     }/bin/python - <<'PY'
     from pathlib import Path
-    from project_layout import validate_flake_source
+    from flake_layout import validate_flake_source
     from test_explorer.test_inventory import inspect_repository
 
     root = Path("native-source").resolve()
     validate_flake_source(root)
-    report = inspect_repository(root)
-    assert report == {
+    inventory = inspect_repository(root)
+    assert inventory == {
         "bash-example": [
             "runtime dependencies are available to tests",
             "the installed command preserves argument boundaries by name or path",

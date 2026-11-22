@@ -110,6 +110,12 @@ in
         package.meta.mainProgram
         leanExample.meta.mainProgram
       ];
+  testFlakeLayoutIsTheDefaultLibraryAndTestExplorerIsASeparateExecutable = check true (
+    !(inputs.self.apps.${system} ? flake_layout)
+    && !(inputs.self.packages.${system}.flake_layout.meta ? mainProgram)
+    && inputs.self.packages.${system}.test-explorer.meta.mainProgram == "test-explorer"
+    && inputs.self.packages.${system}.default == inputs.self.packages.${system}.flake_layout
+  );
   testHostAndVmChecksUseTheHostPlatform =
     check
       [
@@ -180,12 +186,6 @@ in
     "lean-example-test"
     "test_main-test"
   ] (builtins.attrNames shells);
-  testProjectLayoutIsTheDefaultLibraryAndTestExplorerIsASeparateExecutable = check true (
-    !(inputs.self.apps.${system} ? project_layout)
-    && !(inputs.self.packages.${system}.project_layout.meta ? mainProgram)
-    && inputs.self.packages.${system}.test-explorer.meta.mainProgram == "test-explorer"
-    && inputs.self.packages.${system}.default == inputs.self.packages.${system}.project_layout
-  );
   testPythonBuilderRequiresImportableModuleNames = check false (
     accepts { src = "/invalid/123"; } || accepts { src = "/invalid/class"; }
   );

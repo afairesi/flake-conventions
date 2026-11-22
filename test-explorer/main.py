@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Literal
 
 from test_explorer import test_inventory
 
-import project_layout
+import flake_layout
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -91,14 +91,14 @@ def fingerprint(root: Path, view: View) -> str | None:
 
 def repositories(home: Path) -> list[str]:
     """Join .gitmodules paths with gitlinks in the current home index."""
-    root = project_layout.git(home, "rev-parse", "--show-toplevel").strip()
+    root = flake_layout.git(home, "rev-parse", "--show-toplevel").strip()
     if Path(root).resolve() != home:
         message = "The selected home must be a Git repository root."
         raise ValueError(message)
     modules = home / ".gitmodules"
     if not modules.is_file():
         return []
-    configured = project_layout.git(
+    configured = flake_layout.git(
         home, "config", "list", "--null", "--file", str(modules)
     )
     paths = set()
@@ -204,7 +204,7 @@ def _repository_node(
             raise ValueError(message)
         if (
             Path(
-                project_layout.git(root, "rev-parse", "--show-toplevel").strip()
+                flake_layout.git(root, "rev-parse", "--show-toplevel").strip()
             ).resolve()
             != root
         ):
@@ -213,7 +213,7 @@ def _repository_node(
         value, hit = cached_output(root, view, cache, refresh=refresh)
         if isinstance(value, dict):
             packages = value
-            status = project_layout.git(
+            status = flake_layout.git(
                 root,
                 "status",
                 "--porcelain",

@@ -46,7 +46,7 @@ class Package:
 
     root: Path
     kind: str
-    definition: nix_syntax.Document
+    declaration: nix_syntax.Document
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -226,7 +226,7 @@ def _python_class_mro(
     return result
 
 
-def _python_test_names(module: ast.Module) -> set[str]:
+def _test_names_from_ast(module: ast.Module) -> set[str]:
     """Collect pytest identifiers, including methods inherited from local bases."""
     classes = {
         node.name: node for node in module.body if isinstance(node, ast.ClassDef)
@@ -276,12 +276,12 @@ def _python_source_issues(package: Package, paths: set[Path]) -> list[str]:
     source = read_regular(package.root / "main.py")
     if source is not None:
         module = ast.parse(source, filename=str(package.root / "main.py"))
-        if _python_test_names(module):
+        if _test_names_from_ast(module):
             issues.append(
                 f"{name}/main.py: move test definitions to test_main.py",
             )
         entrypoint = (
-            None if _python_library(package.definition) else _python_entrypoint(module)
+            None if _python_library(package.declaration) else _python_entrypoint(module)
         )
         prefix = f"{name}/main.py: "
         if isinstance(entrypoint, ast.AsyncFunctionDef):
@@ -418,6 +418,6 @@ def _python_library(document: nix_syntax.Document) -> bool:
     ] == ["false"]
 
 
-def python_suite_names(path: Path) -> set[str]:
+def python_test_names(path: Path) -> set[str]:
     """Read the pytest identifiers declared in a suite."""
-    return _python_test_names(_source(path))
+    return _test_names_from_ast(_source(path))
