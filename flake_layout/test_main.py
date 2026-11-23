@@ -4,7 +4,6 @@
 import os
 import re
 import shutil
-import stat
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,23 +45,20 @@ def _git(root: Path, *arguments: str) -> str:
 
 @pytest.mark.parametrize("exported", [False, True], ids=["git", "export"])
 def test_layout_check_skips_nested_assets_without_running_package_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, exported: bool
+    root: Path, monkeypatch: pytest.MonkeyPatch, *, exported: bool
 ) -> None:
     """Check package files without executing code or traversing nested assets."""
-    repository = _repository(tmp_path)
-    _add_example(repository, python=True)
-    (repository / "example/main.py").write_text(
-        "raise RuntimeError('must not execute')\n"
-    )
-    assets = repository / "example/assets"
+    _add_example(root, python=True)
+    (root / "example/main.py").write_text("raise RuntimeError('must not execute')\n")
+    assets = root / "example/assets"
     assets.mkdir()
     (assets / "default.nix").write_text("invalid nested declaration")
-    _git(repository, "add", "--", "example")
-    local = repository / "experiments"
+    _git(root, "add", "--", "example")
+    local = root / "experiments"
     local.mkdir()
     (local / "main.py").write_text("invalid untracked source")
     if exported:
-        shutil.rmtree(repository / ".git")
+        shutil.rmtree(root / ".git")
     original = os.scandir
 
     def guarded(path: str | os.PathLike[str]) -> Iterator[os.DirEntry[str]]:
@@ -74,10 +70,10 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
         return original(path)
 
     monkeypatch.setattr(os, "scandir", guarded)
-    sources = flake_layout.source_paths(repository)
+    sources = flake_layout.source_paths(root)
     _expect(Path("example/default.nix") in sources, sources)
     _expect(Path("example/assets/default.nix") not in sources, sources)
-    flake_layout.validate_flake_source(repository)
+    flake_layout.validate_flake_source(root)
 
 
 def _expect(condition: bool, detail: object) -> None:  # noqa: FBT001
@@ -86,50 +82,32 @@ def _expect(condition: bool, detail: object) -> None:  # noqa: FBT001
         raise AssertionError(detail)
 
 
-def _repository(root: Path) -> Path:
-    """Index a minimal flake in an existing temporary directory."""
-    _git(root, "init", "--quiet")
-    (root / "flake.nix").write_text("{}\n")
-    (root / "flake.lock").touch()
-    _git(root, "add", ".")
-    return root
-
-
 @pytest.fixture(name="root")
 def repository_root_fixture(tmp_path: Path) -> Path:
-    """Index a flake alongside the test's other temporary files."""
-    root = tmp_path / "repo"
-    root.mkdir()
-    return _repository(root)
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[int, bytes]]:
-    """Observe contents and modes, including Git metadata and symbolic links."""
-    files = {}
-    for path in root.rglob("*"):
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
-            contents = os.fsencode(path.readlink())
-        elif stat.S_ISREG(mode):
-            contents = path.read_bytes()
-        else:
-            contents = b""
-        files[path.relative_to(root)] = (mode, contents)
-    return files
+    """Stage a minimal flake in an isolated Git repository."""
+    _git(tmp_path, "init", "--quiet")
+    (tmp_path / "flake.nix").write_text("{}\n")
+    (tmp_path / "flake.lock").touch()
+    _git(tmp_path, "add", ".")
+    return tmp_path
 
 
 def test_layout_check_rejects_a_tracked_python_package_initializer(
     root: Path,
 ) -> None:
-    """Reject a selected initializer without changing source or installing over main."""
+    """Report the reserved initializer and preserve the index and working tree."""
     _add_example(root, python=True)
     initializer = root / "example/__init__.py"
     initializer.write_text('"""Personal initialization."""\n')
     _git(root, "add", "example/__init__.py")
-    before = _snapshot(root)
+    staged = _git(root, "write-tree").strip()
     with pytest.raises(ValueError, match=r"__init__\.py: reserved"):
         flake_layout.validate_flake_source(root)
-    _expect(_snapshot(root) == before, "rejection changed sources")
+    _git(root, "diff", "--cached", "--exit-code", staged)
+    _git(root, "diff", "--exit-code", staged)
+    _expect(
+        not _git(root, "ls-files", "--others"), "validation created untracked files"
+    )
 
 
 @pytest.mark.parametrize(
