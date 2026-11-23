@@ -7,7 +7,7 @@ import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
-import normalize_nix_bindings as alphabetize
+import normalize_nix_bindings
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -22,9 +22,9 @@ def test_nested_bindings_flatten_to_a_dotted_path_within_a_linear_visit_budget(
     """Bound tree visits so small nested inputs cannot trigger exponential work."""
     depth = 10
     source = "{ a = " * depth + "1" + "; }" * depth
-    renderer = Mock(wraps=alphabetize.render_node)
-    monkeypatch.setattr(alphabetize, "render_node", renderer)
-    formatted = alphabetize.format_text(source)
+    renderer = Mock(wraps=normalize_nix_bindings.render_node)
+    monkeypatch.setattr(normalize_nix_bindings, "render_node", renderer)
+    formatted = normalize_nix_bindings.format_text(source)
     if renderer.call_count > len(source) * 4:
         raise AssertionError(renderer.call_count)
     if formatted != "{ " + ".".join(["a"] * depth) + " = 1; }":
@@ -70,8 +70,8 @@ def test_formatting_integer_bindings_preserves_their_values_and_stabilizes_in_on
     source = (
         "{ " + " ".join(f'"{key}" = {value};' for key, value in bindings.items()) + " }"
     )
-    formatted = alphabetize.format_text(source)
-    if alphabetize.format_text(formatted) != formatted:
+    formatted = normalize_nix_bindings.format_text(source)
+    if normalize_nix_bindings.format_text(formatted) != formatted:
         raise AssertionError(formatted)
     result = _evaluate(formatted)
     if result.returncode or json.loads(result.stdout) != bindings:
@@ -159,12 +159,12 @@ def test_formatting_sorts_nix_bindings_and_reaches_a_stable_form_in_one_pass(
 )
 def test_formatting_preserves_nix_values_list_order_and_comments(source: str) -> None:
     """Rewriting preserves the value that Nix evaluates, including list order."""
-    rendered = alphabetize.format_text(source)
+    rendered = normalize_nix_bindings.format_text(source)
     expected = _evaluate(source)
     actual = _evaluate(rendered)
     if expected.returncode or actual.returncode or actual.stdout != expected.stdout:
         raise AssertionError((expected, actual, rendered))
-    if alphabetize.format_text(rendered) != rendered:
+    if normalize_nix_bindings.format_text(rendered) != rendered:
         raise AssertionError(rendered)
     for line in source.splitlines():
         if "#" in line and line.split("#", 1)[1] not in rendered:
@@ -208,7 +208,7 @@ def test_formatting_preserves_nix_evaluation_errors(
 ) -> None:
     """Nix continues to reject semantic errors after canonicalization."""
     expected = _evaluate(source)
-    actual = _evaluate(alphabetize.format_text(source))
+    actual = _evaluate(normalize_nix_bindings.format_text(source))
     if (
         not expected.returncode
         or actual.returncode != expected.returncode

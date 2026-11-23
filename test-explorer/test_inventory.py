@@ -42,7 +42,7 @@ class PackageChange(TypedDict):
 def inspect_repository(root: Path) -> dict[str, list[str]]:
     """Map each declared package to its sorted, statically named tests."""
     if not (root / "flake.nix").is_file():
-        message = f"{root}: expected an Afairesi repository with flake.nix"
+        message = f"{root}: missing flake.nix"
         raise ValueError(message)
     paths = flake_layout.source_paths(root)
     packages, _ = flake_layout.detect_packages(root, paths)

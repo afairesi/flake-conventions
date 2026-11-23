@@ -75,6 +75,9 @@ in
     checks.formatter == consumer.formatter.${system}.passthru.tests.check
     && pkgs.lib.all (name: checks."pkgs-${name}" == packages.${name}) (builtins.attrNames packages)
   );
+  testDefaultPackageIsTheLayoutLibrary =
+    check inputs.self.packages.${system}.flake_layout
+      inputs.self.packages.${system}.default;
   testEachTestShellHasAMatchingCheck = check true (
     pkgs.lib.all (name: checks."devshell-${name}" == shells.${name}) (builtins.attrNames shells)
   );
@@ -84,8 +87,8 @@ in
         apps = { };
         checks = [
           "formatter"
+          "layout"
           "lint"
-          "structure"
         ];
         formatter = [ system ];
         hosts = { };
@@ -110,12 +113,6 @@ in
         package.meta.mainProgram
         leanExample.meta.mainProgram
       ];
-  testFlakeLayoutIsTheDefaultLibraryAndTestExplorerIsASeparateExecutable = check true (
-    !(inputs.self.apps.${system} ? flake_layout)
-    && !(inputs.self.packages.${system}.flake_layout.meta ? mainProgram)
-    && inputs.self.packages.${system}.test-explorer.meta.mainProgram == "test-explorer"
-    && inputs.self.packages.${system}.default == inputs.self.packages.${system}.flake_layout
-  );
   testHostAndVmChecksUseTheHostPlatform =
     check
       [

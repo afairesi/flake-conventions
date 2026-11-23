@@ -32,7 +32,7 @@ let
           };
         };
         settings.formatter = {
-          alphabetize-nix = {
+          format-nix = {
             command = pkgs.writeShellApplication {
               name = "format-nix";
               runtimeInputs = [
@@ -504,15 +504,15 @@ let
             (lib.mapAttrs' (name: shell: lib.nameValuePair "devshell-${name}" shell) self.devShells.${system})
             {
               formatter = self.formatter.${system}.passthru.tests.check;
+              layout = layoutCheck {
+                pkgs = packageSets.${system};
+                src = source;
+              };
               lint =
                 (lint {
                   inherit self;
                   pkgs = packageSets.${system};
                 }).passthru.tests.check;
-              structure = layoutCheck {
-                pkgs = packageSets.${system};
-                src = source;
-              };
             }
           ]
           ++ lib.mapAttrsToList (host: configuration: {

@@ -115,7 +115,7 @@ pkgs.runCommand "afairesi-consumer-contract"
     mkdir native-source
     cp -R ${consumerSource}/{bash-example,example,lean-example,nix-library,python_native,rust-native} native-source/
     touch native-source/{flake.nix,flake.lock}
-    test ! -e ${inputs.self.packages.${system}.flake_layout}/bin/flake_layout
+    ${pkgs.lib.getExe inputs.self.packages.${system}.test-explorer} --help > /dev/null
     ${
       (pkgs.python3.withPackages (_: [ inputs.self.packages.${system}.test-explorer ]))
     }/bin/python - <<'PY'
