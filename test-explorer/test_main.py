@@ -196,12 +196,12 @@ def mixed_language_checkout(home: Path) -> Path:
         "nix": (
             "",
             "test_main.nix",
-            "{ testKeepsName = { expr = 1; expected = 1; }; }",
+            "{ testHTTPRequestsUseAHeader = { expr = 1; expected = 1; }; }",
         ),
         "proof": (
             "mkLean4Package",
             "test_main.lean",
-            "namespace Output\ntheorem keepsName : True := trivial\nend Output",
+            "namespace Output\ntheorem gardeÉtiquette : True := trivial\nend Output",
         ),
         "crate": (
             "",
@@ -236,8 +236,8 @@ def test_bats_nix_lean_and_rust_test_names_are_searchable_under_their_packages(
     project = ("github.com", "owner", "project")
     for package, name in {
         "shell": "preserves spaces",
-        "nix": "KeepsName",
-        "proof": "Output.keepsName",
+        "nix": "HTTP requests use a header",
+        "proof": "Output.garde étiquette",
         "crate": "output::keeps name",
     }.items():
         expect(labels(tree, *project, package) == [name], package)
@@ -250,6 +250,14 @@ def test_bats_nix_lean_and_rust_test_names_are_searchable_under_their_packages(
             any(row.strip() == f"▾ {package} (1)" for row, _, _ in frame),
             frame,
         )
+    expect(viewer.search("testHTTPRequestsUseAHeader"), tree)
+    expect(
+        any(
+            selected and row.strip() == "HTTP requests use a header"
+            for row, selected, _ in viewer.frame(40)
+        ),
+        tree,
+    )
     expect(viewer.search("untested"), tree)
     frame = viewer.frame(40)
     expect(
@@ -279,7 +287,9 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
         == ["- preserves spaces", "+ accepts blanks", "+ preserves tabs"],
         changes,
     )
-    expect(labels(changes, *project, "- proof") == ["- Output.keepsName"], changes)
+    expect(
+        labels(changes, *project, "- proof") == ["- Output.garde étiquette"], changes
+    )
     expect("- untested" in labels(changes, *project), changes)
     tests = subject.Viewer(subject.build_tree(home, cache=cache))
     expect(tests.search("+ preserves tabs"), tests.root)

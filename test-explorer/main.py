@@ -9,7 +9,6 @@ import curses
 import hashlib
 import json
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -301,6 +300,30 @@ def build_tree(
     return tree
 
 
+def _test_title(leaf: str) -> str:
+    """Turn an identifier into words, preserving acronyms and free-form titles."""
+    title = leaf.removeprefix("test_")
+    if leaf.startswith("test") and leaf[4:5].isupper():
+        title = leaf[4:]
+    if not title.isidentifier():
+        return title or leaf
+    words = []
+    for part in title.split("_"):
+        if not part:
+            continue
+        start = 0
+        for index in range(1, len(part)):
+            if part[index].isupper() and (
+                not part[index - 1].isupper() or part[index + 1 : index + 2].islower()
+            ):
+                words.append(part[start:index])
+                start = index
+        words.append(part[start:])
+    return " ".join(
+        word if len(word) > 1 and word.isupper() else word.lower() for word in words
+    )
+
+
 @dataclass(eq=False)
 class Node:
     """One plain label with optional folded children."""
@@ -321,8 +344,7 @@ class Node:
     def add_test(self, name: str, *, change: str = "") -> None:
         """Show a readable test label while keeping the source name searchable."""
         scope, separator, leaf = name.rpartition("::" if "::" in name else ".")
-        title = re.sub(r"^test(?:_|(?=[A-Z]))", "", leaf) or leaf
-        label = (scope + separator + title).replace("_", " ")
+        label = scope.replace("_", " ") + separator + _test_title(leaf)
         marker = f"{change} " if change else ""
         child = self.add(marker + name, change=change)
         child.test_label = marker + (label if label.strip() else name)
