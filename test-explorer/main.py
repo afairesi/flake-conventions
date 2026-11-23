@@ -333,7 +333,7 @@ class Node:
     expanded: bool = False
     change: str = ""
     detail: str = ""
-    test_label: str = ""
+    source_label: str = ""
 
     def add(self, label: str, *, change: str = "") -> Node:
         """Append a folded child and return it for further details."""
@@ -346,8 +346,8 @@ class Node:
         scope, separator, leaf = name.rpartition("::" if "::" in name else ".")
         label = scope.replace("_", " ") + separator + _test_title(leaf)
         marker = f"{change} " if change else ""
-        child = self.add(marker + name, change=change)
-        child.test_label = marker + (label if label.strip() else name)
+        child = self.add(marker + (label if label.strip() else name), change=change)
+        child.source_label = marker + name
 
     def visible(self, depth: int = 0) -> Iterator[tuple[Node, int]]:
         """Visit only the rows exposed by expanded branches."""
@@ -432,11 +432,11 @@ class Viewer:
                 replacement = new
             siblings: defaultdict[str, list[Node]] = defaultdict(list)
             for child in reversed(old.children):
-                siblings[child.label].append(child)
+                siblings[child.source_label or child.label].append(child)
             pairs.extend(
-                (siblings[child.label].pop(), child)
+                (matches.pop(), child)
                 for child in new.children
-                if siblings[child.label]
+                if (matches := siblings.get(child.source_label or child.label))
             )
         self.root = root
         rows = list(root.visible())
@@ -462,7 +462,7 @@ class Viewer:
         for match in nodes[start:] + nodes[:start]:
             if (
                 needle in match.label.casefold()
-                or needle in match.test_label.casefold()
+                or needle in match.source_label.casefold()
             ):
                 node = match
                 while node in parents:
@@ -547,8 +547,7 @@ class Viewer:
         ):
             marker = ("▾" if node.expanded else "▸") if node.children else " "
             label = "".join(
-                char if char.isprintable() else repr(char)[1:-1]
-                for char in node.test_label or node.label
+                char if char.isprintable() else repr(char)[1:-1] for char in node.label
             )
             if node.detail:
                 label += f" ({node.detail})"

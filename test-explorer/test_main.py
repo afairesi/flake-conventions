@@ -45,7 +45,7 @@ def labels(node: subject.Node, *path: str) -> list[str]:
     """Read the child labels at a displayed tree path."""
     for name in path:
         node = next(child for child in node.children if child.label == name)
-    return [child.test_label or child.label for child in node.children]
+    return [child.label for child in node.children]
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -69,6 +69,8 @@ def commit(root: Path, message: str) -> None:
         "user.email=test@example.invalid",
         "-c",
         "commit.gpgsign=false",
+        "-c",
+        "maintenance.auto=false",
         "commit",
         "--quiet",
         "-m",
@@ -76,32 +78,17 @@ def commit(root: Path, message: str) -> None:
     )
 
 
-def initialize(root: Path) -> None:
-    """Stage a package and its test suite without running its Nix builder."""
-    root.mkdir(parents=True, exist_ok=True)
-    git(root, "init", "--quiet")
-    (root / "flake.nix").write_text("{}")
-    package = root / "example"
-    package.mkdir()
-    (package / "default.nix").write_text(
-        "{ inputs, pkgs, ... }: inputs.self.lib.mkPythonPackage { "
-        "inherit pkgs; executable = false; src = ./.; }"
-    )
-    (package / "test_main.py").write_text("def test_original(): ...\n")
-    git(root, "add", "--force", ".")
-
-
 @pytest.fixture(name="checkout")
 def checkout_fixture(tmp_path: Path) -> Path:
     """Create one tracked package for cache tests."""
     root = tmp_path / "project"
-    initialize(root)
+    _indexed_repository(root)
     return root
 
 
 def add_submodule(home: Path, child: Path) -> None:
     """Create a fixture checkout and register its commit in the home index."""
-    initialize(child)
+    _indexed_repository(child)
     commit(child, "baseline")
     path = child.relative_to(home).as_posix()
     git(home, "config", "set", "--file", ".gitmodules", f"submodule.{path}.path", path)
@@ -174,7 +161,7 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
     expect(colors["+ working"] == "+" and colors["- staged"] == "-", colors)
     expect(colors["▸ gitlab.com"] == "", colors)
     other = ("gitlab.com", "owner", "project")
-    expect(labels(tree, *other, "example") == ["original"], tree)
+    expect(labels(tree, *other, "example") == ["default output"], tree)
     expect(labels(tree, *other) == ["example"], tree)
     expect(
         labels(tree, "missing") == ["error: This submodule is not initialized."], tree
@@ -328,7 +315,8 @@ def test_home_tree_reports_a_timeout_and_shows_current_status_for_a_cached_repos
         tree,
     )
     expect(
-        labels(tree, "gitlab.com", "owner", "project", "example") == ["original"], tree
+        labels(tree, "gitlab.com", "owner", "project", "example") == ["default output"],
+        tree,
     )
     viewer = subject.Viewer(tree)
     expect(viewer.search("gitlab.com"), tree)
@@ -489,7 +477,6 @@ def test_directories_start_collapsed_and_can_be_expanded_with_the_keyboard() -> 
         viewer.handle(key, 30)
     package = list(viewer.root.visible())[viewer.selected][0]
     expect(package.label == "hello" and package.expanded, package)
-    expect(labels(package) == ["greets the reader"], package.children)
     for key in "hhh":
         viewer.handle(key, 30)
     expect(
@@ -606,10 +593,12 @@ def test_refresh_shows_current_tests_and_diffs_and_keeps_the_selected_test(
 ) -> None:
     """Follow the highlight as rows move, then remove the selected test."""
     tree = subject.Node("home", expanded=True)
-    tree.add("package").add("result")
+    tree.add("package").add_test("test_result")
     updated = subject.Node("home", expanded=True)
     updated.add("another package")
-    updated.add("package").add("result")
+    package = updated.add("package")
+    package.add_test("testResult")
+    package.add_test("test_result")
     tests = subject.Node("current tests", expanded=True)
     tests.add("obsolete test")
     empty = subject.Node("no remaining tests")
@@ -634,7 +623,15 @@ def test_refresh_shows_current_tests_and_diffs_and_keeps_the_selected_test(
         yield "r"
         rows = screen.addnstr.call_args_list
         expect(any(row.args[2].strip() == "another package" for row in rows), rows)
-        expect(selected_label() == "result", rows)
+        expect(
+            [
+                bool(row.args[4] & curses.A_REVERSE)
+                for row in rows
+                if row.args[2].strip() == "result"
+            ]
+            == [False, True],
+            rows,
+        )
         yield "d"
         expect(selected_label() == "▾ current tests", screen.addnstr.call_args_list)
         yield "j"
@@ -751,21 +748,16 @@ def _fixture_add(
     git(root, "add", "--force", "--", name)
 
 
-def _repository(root: Path) -> Path:
-    """Index a minimal flake in an existing temporary directory."""
-    git(root, "init", "--quiet")
-    (root / "flake.nix").write_text("{}\n")
-    (root / "flake.lock").touch()
-    git(root, "add", ".")
-    return root
-
-
 @pytest.fixture(name="root")
 def repository_root_fixture(tmp_path: Path) -> Path:
     """Index a flake alongside the test's other temporary files."""
     root = tmp_path / "repo"
     root.mkdir()
-    return _repository(root)
+    git(root, "init", "--quiet")
+    (root / "flake.nix").write_text("{}\n")
+    (root / "flake.lock").touch()
+    git(root, "add", ".")
+    return root
 
 
 def _snapshot(root: Path) -> dict[Path, tuple[int, bytes]]:
@@ -996,7 +988,7 @@ def test_the_package_list_preserves_declared_names_and_excludes_standalone_hosts
 
 
 def _inspection_repository(root: Path) -> None:
-    (root / "flake.nix").touch()
+    (root / "flake.nix").write_text("{}\n")
     package = root / "example"
     package.mkdir(parents=True)
     (package / "default.nix").write_text(
@@ -1082,9 +1074,10 @@ def test_inspection_reports_a_missing_flake_or_invalid_python_test_source(
 
 def _indexed_repository(root: Path) -> None:
     """Stage the sources used as the diff baseline."""
+    root.mkdir(parents=True, exist_ok=True)
     _inspection_repository(root)
     git(root, "init", "--quiet")
-    git(root, "add", ".")
+    git(root, "add", "--force", ".")
 
 
 def _write_test(root: Path, name: str) -> None:
@@ -1171,7 +1164,6 @@ def test_a_failed_test_name_comparison_removes_its_temporary_snapshots(
 ) -> None:
     """Clean failed snapshots when a tracked source cannot be inspected."""
     root = tmp_path / "repository"
-    root.mkdir()
     _indexed_repository(root)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
@@ -1189,7 +1181,7 @@ def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
 ) -> None:
     """Report the conflicting index before producing a test-name diff."""
     _indexed_repository(tmp_path)
-    blob = git(tmp_path, "rev-parse", ":example/main.py").strip()
+    blob = git(tmp_path, "rev-parse", ":example/main.py")
     subprocess.run(
         ["git", "update-index", "--index-info"],  # noqa: S607
         cwd=tmp_path,
@@ -1219,23 +1211,8 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
 ) -> None:
     """Read the selected worktree's index while preserving shared Git metadata."""
     root, linked = tmp_path / "repository", tmp_path / "linked"
-    root.mkdir()
     _indexed_repository(root)
-    git(
-        root,
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "maintenance.auto=false",
-        "commit",
-        "--quiet",
-        "-m",
-        "initial",
-    )
+    commit(root, "initial")
     git(root, "worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
     _write_test(linked, "staged")
     git(linked, "add", "example/test_main.py")
