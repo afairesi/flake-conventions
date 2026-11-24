@@ -9,7 +9,7 @@ import nix_syntax
 
 
 @given(st.binary(max_size=4096))
-def test_parsing_returns_the_original_bytes_or_raises_a_nix_syntax_error(
+def test_parsing_preserves_source_bytes_in_the_document_or_raises_a_nix_syntax_error(
     source: bytes,
 ) -> None:
     """Arbitrary bytes produce a document or the documented syntax error."""

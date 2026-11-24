@@ -53,6 +53,7 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
     assets = root / "example/assets"
     assets.mkdir()
     (assets / "default.nix").write_text("invalid nested declaration")
+    (assets / "nested.rs").touch()
     _git(root, "add", "--", "example")
     local = root / "experiments"
     local.mkdir()
@@ -72,7 +73,7 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
     monkeypatch.setattr(os, "scandir", guarded)
     sources = flake_layout.source_paths(root)
     _expect(Path("example/default.nix") in sources, sources)
-    _expect(Path("example/assets/default.nix") not in sources, sources)
+    _expect(not any(path.is_relative_to("example/assets") for path in sources), sources)
     flake_layout.validate_flake_source(root)
 
 

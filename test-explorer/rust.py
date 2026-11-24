@@ -150,7 +150,7 @@ class _Crate:
                     self.read(target, location, qualifier, ancestors)
 
 
-def cargo_names(root: Path, tracked: set[Path] | None) -> set[str]:
+def rust_test_names(root: Path, tracked: set[Path] | None) -> set[str]:
     """List static #[test] functions reachable from this package's test harnesses."""
     path = root / "Cargo.toml"
     try:

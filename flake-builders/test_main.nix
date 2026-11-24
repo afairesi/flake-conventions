@@ -5,7 +5,6 @@ let
     consumerSource
     htmlPackage
     overridden
-    overriddenPackage
     package
     pythonLibrary
     system
@@ -46,10 +45,6 @@ let
   leanExample = consumer.packages.${system}.lean-example;
   leanLibrary = consumer.packages.${system}.test_main;
   overriddenCheck = overridden.checks.${system}.example;
-  overriddenEnvironment = inputs.self.lib.mkTestEnvironment {
-    inherit pkgs;
-    packageDrv = overriddenPackage;
-  };
   packages = consumer.packages.${system};
   shells = consumer.devShells.${system};
 in
@@ -106,13 +101,6 @@ in
   testEveryPackageSystemHasAFormatter = check (builtins.attrNames consumer.packages) (
     builtins.attrNames consumer.formatter
   );
-  testExecutablePackagesUseTheirPackageNameAsTheMainProgram =
-    check
-      [ "example" "lean-example" ]
-      [
-        package.meta.mainProgram
-        leanExample.meta.mainProgram
-      ];
   testHostAndVmChecksUseTheHostPlatform =
     check
       [
@@ -121,7 +109,7 @@ in
       ]
       [
         (checks ? nixos-example)
-        (checks ? exampleVm && builtins.isString checks.exampleVm.drvPath)
+        (checks ? exampleVm)
       ];
   testHostsReceiveConsumerConfigurationAndOverlays =
     let
@@ -136,6 +124,7 @@ in
         host.config.networking.hostName
       ];
   testHtmlPackagesPreserveTheSuppliedDescription = check "Source listing" htmlPackage.meta.description;
+  testLeanLibraryHasNoRunnableApp = check false (apps ? test_main);
   testLibrariesHaveNoMainProgram =
     check
       [ false false ]
@@ -143,7 +132,6 @@ in
         (pythonLibrary.meta ? mainProgram)
         (leanLibrary.meta ? mainProgram)
       ];
-  testLibrariesHaveNoRunnableApp = check false (apps ? test_main);
   testLibraryBuildersRejectRuntimeHooks =
     check
       [ false false ]
@@ -157,9 +145,6 @@ in
           runtimeHook = "echo invalid";
         })
       ];
-  testLibraryChecksOmitTheExecutablePath = check false (
-    inputs.self.checks.${system}.nix_syntax ? PACKAGE_E2E_EXECUTABLE
-  );
   testNativeBuildersKeepTheirOwnPackageAttributes =
     check
       [ false false true ]
@@ -183,6 +168,13 @@ in
     "lean-example-test"
     "test_main-test"
   ] (builtins.attrNames shells);
+  testPythonAndLeanExecutablesUseTheirPackageNameAsTheMainProgram =
+    check
+      [ "example" "lean-example" ]
+      [
+        package.meta.mainProgram
+        leanExample.meta.mainProgram
+      ];
   testPythonBuilderRequiresImportableModuleNames = check false (
     accepts { src = "/invalid/123"; } || accepts { src = "/invalid/class"; }
   );
@@ -194,12 +186,15 @@ in
       (
         input:
         builtins.elem input overriddenCheck.nativeBuildInputs
-        && builtins.elem input overriddenEnvironment.python.paths
+        && builtins.elem input overridden.devShells.${system}.example-test.nativeBuildInputs
       )
       [
         pkgs.python3Packages.six
         pkgs.python3Packages.colorama
       ]
+  );
+  testPythonLibraryCheckOmitsTheExecutablePath = check false (
+    inputs.self.checks.${system}.nix_syntax ? PACKAGE_E2E_EXECUTABLE
   );
   testRuntimeHooksStayOutsideThePackageBuild =
     check

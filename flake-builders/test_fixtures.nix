@@ -83,7 +83,6 @@ in
     consumerSource
     htmlPackage
     overridden
-    overriddenPackage
     package
     pythonLibrary
     system

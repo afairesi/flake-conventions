@@ -1110,7 +1110,6 @@ let
             '';
         runtimeInputs = [ pkgs.git ];
         text = ''
-          unset PRJ_ROOT
           exec ${pkgs.lib.getExe config.package} --config-file=${config.build.configFile} \
             --tree-root-file=flake.nix --walk git "$@"
         '';
@@ -1243,7 +1242,6 @@ in
       mkLatexPackage
       mkLean4Package
       mkPythonPackage
-      mkTestEnvironment
       ;
   };
 }

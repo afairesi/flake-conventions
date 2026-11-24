@@ -20,14 +20,14 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from test_explorer import test_inventory
+from test_explorer import suite_inventory
 
 import flake_layout
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
-CACHE_VERSION = 7
+CACHE_VERSION = 8
 XTERM_ORANGE = 208
 RGB_COLORS = 1 << 24
 RGB_ORANGE = 0xFF8700
@@ -36,7 +36,7 @@ type View = Literal["tests", "diff"]
 READ_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
-type Payload = dict[str, list[str]] | list[test_inventory.PackageChange]
+type Payload = dict[str, list[str]] | list[suite_inventory.PackageChange]
 
 
 def _path_stamp(path: Path) -> bytes:
@@ -69,7 +69,7 @@ def _path_stamp(path: Path) -> bytes:
 def fingerprint(root: Path, view: View) -> str | None:
     """Track the test inventory inputs in the index and working tree."""
     try:
-        files = test_inventory.diff_inputs(root)
+        files = suite_inventory.diff_inputs(root)
     except ValueError:
         return None
     digest = hashlib.sha256()
@@ -106,7 +106,7 @@ def repositories(home: Path) -> list[str]:
         if key.startswith("submodule.") and key.endswith(".path"):
             paths.add(value)
     result = []
-    for mode, _oid, stage, path in test_inventory.index_entries(home):
+    for mode, _oid, stage, path in suite_inventory.index_entries(home):
         if mode != "160000" or stage != "0" or path not in paths:
             continue
         location = (home / path).resolve()
@@ -159,7 +159,7 @@ def cached_output(
 ) -> tuple[Payload, bool]:
     """Cache stable inspections and tolerate unavailable cache storage."""
     key = hashlib.sha256(
-        json.dumps([CACHE_VERSION, str(root), view, test_inventory.__file__]).encode()
+        json.dumps([CACHE_VERSION, str(root), view, suite_inventory.__file__]).encode()
     ).hexdigest()
     path = cache / f"{key}.json"
     before = fingerprint(root, view)
@@ -173,9 +173,9 @@ def cached_output(
             ):
                 return saved["value"], True
     value = (
-        test_inventory.inspect_repository(root)
+        suite_inventory.inspect_repository(root)
         if view == "tests"
-        else test_inventory.diff_repository(root)
+        else suite_inventory.diff_repository(root)
     )
     if before is not None and fingerprint(root, view) == before:
         _write_cache_entry(path, {"fingerprint": before, "value": value})
@@ -300,6 +300,46 @@ def build_tree(
     return tree
 
 
+_SPELLINGS = {
+    word.lower(): word
+    for word in (
+        "API",
+        "Bats",
+        "Cargo",
+        "CLI",
+        "CPU",
+        "CSV",
+        "DICOM",
+        "DICOMs",
+        "EEG",
+        "EXIF",
+        "Git",
+        "HTML",
+        "HTTP",
+        "IDs",
+        "ID",
+        "JavaScript",
+        "JSON",
+        "Nix",
+        "Lean",
+        "NLL",
+        "OCR",
+        "OpenAPI",
+        "PDF",
+        "PDFs",
+        "PyTorch",
+        "Python",
+        "RGB",
+        "SQLite",
+        "Rust",
+        "TLS",
+        "URI",
+        "UUID",
+        "VM",
+    )
+}
+
+
 def _test_title(leaf: str) -> str:
     """Turn an identifier into words, preserving acronyms and free-form titles."""
     title = leaf.removeprefix("test_")
@@ -320,7 +360,10 @@ def _test_title(leaf: str) -> str:
                 start = index
         words.append(part[start:])
     return " ".join(
-        word if len(word) > 1 and word.isupper() else word.lower() for word in words
+        _SPELLINGS.get(
+            word.lower(), word if len(word) > 1 and word.isupper() else word.lower()
+        )
+        for word in words
     )
 
 
@@ -379,7 +422,7 @@ def _directory_tree(home: Path, repositories_by_path: dict[str, Node]) -> Node:
 def add_tests(
     node: Node,
     packages: dict[str, list[str]] | None,
-    changes: Sequence[test_inventory.PackageChange] = (),
+    changes: Sequence[suite_inventory.PackageChange] = (),
 ) -> None:
     """Mark changed tests and include current tests and counts in the tests view."""
     names = {

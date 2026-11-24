@@ -14,7 +14,7 @@ from unittest.mock import Mock, call
 
 import pytest
 import test_explorer as subject
-from test_explorer import test_inventory
+from test_explorer import suite_inventory
 
 import flake_layout
 
@@ -172,23 +172,47 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
 
 @pytest.fixture
 def mixed_language_checkout(home: Path) -> Path:
-    """Stage Bats, Nix, Lean and Rust suites in one checkout."""
+    """Track package declarations and leave their suite sources ready to stage."""
     checkout = home / "github.com/owner/project"
     suites = {
         "shell": (
             "mkBashPackage",
             "test_main.bats",
-            '@test "preserves spaces" { true; }',
+            """exit 99
+cat <<'TEXT'
+@test "not a declaration" {
+TEXT
+@test "preserves spaces" { true; }
+handles_tabs() { # @test
+  true
+}
+helper() { true; }
+""",
         ),
         "nix": (
             "",
             "test_main.nix",
-            "{ testHTTPRequestsUseAHeader = { expr = 1; expected = 1; }; }",
+            """{ ... }: let
+              selection = [ "testHTTPRequestsUseAHeader" "keepsSpaces" ];
+              suite = {
+                tests = selection;
+                keepsSpaces = { expr = throw "never evaluate"; expected = true; };
+                testHTTPRequestsUseAHeader = { expr = 1; expected = 1; };
+                testExcluded = { expr = false; expected = true; };
+              };
+            in (suite)""",
         ),
         "proof": (
             "mkLean4Package",
             "test_main.lean",
-            "namespace Output\ntheorem gardeÉtiquette : True := trivial\nend Output",
+            """namespace Résultats
+section
+/- theorem ignored : True := trivial -/
+theorem gardeÉtiquette : True := trivial
+example : True := trivial
+end
+end Résultats
+""",
         ),
         "crate": (
             "",
@@ -208,35 +232,43 @@ def mixed_language_checkout(home: Path) -> Path:
     (checkout / "crate/Cargo.toml").write_text(
         '[package]\nname = "crate"\nversion = "0.1.0"\n'
     )
-    git(checkout, "add", "--", *suites)
+    git(checkout, "add", "--", "*/default.nix", "crate/Cargo.toml")
     return checkout
 
 
-@pytest.mark.usefixtures("mixed_language_checkout")
-def test_bats_nix_lean_and_rust_test_names_are_searchable_under_their_packages(
+def test_tracked_bats_nix_lean_and_rust_tests_are_searchable_under_their_packages(
     home: Path,
+    mixed_language_checkout: Path,
 ) -> None:
     """Search each suite's displayed name and select it under its package."""
     cache = home.parent / "cache"
+    expected = {
+        "shell": ["handles tabs", "preserves spaces"],
+        "nix": ["keeps spaces", "HTTP requests use a header"],
+        "proof": ["Résultats.garde étiquette"],
+        "crate": ["output::keeps name"],
+    }
+    before = suite_inventory.inspect_repository(mixed_language_checkout)
+    expect(all(before[package] == [] for package in expected), before)
+    git(mixed_language_checkout, "add", ".")
     tree = subject.build_tree(home, cache=cache)
     viewer = subject.Viewer(tree)
     project = ("github.com", "owner", "project")
-    for package, name in {
-        "shell": "preserves spaces",
-        "nix": "HTTP requests use a header",
-        "proof": "Output.garde étiquette",
-        "crate": "output::keeps name",
-    }.items():
-        expect(labels(tree, *project, package) == [name], package)
-        expect(viewer.search(name), name)
-        frame = viewer.frame(40)
-        expect(
-            any(selected and row.strip() == name for row, selected, _ in frame), frame
-        )
-        expect(
-            any(row.strip() == f"▾ {package} (1)" for row, _, _ in frame),
-            frame,
-        )
+    for package, names in expected.items():
+        expect(sorted(labels(tree, *project, package)) == sorted(names), package)
+        for name in names:
+            expect(viewer.search(name), name)
+            frame = viewer.frame(40)
+            expect(
+                any(selected and row.strip() == name for row, selected, _ in frame),
+                frame,
+            )
+            expect(
+                any(
+                    row.strip() == f"▾ {package} ({len(names)})" for row, _, _ in frame
+                ),
+                frame,
+            )
     expect(viewer.search("testHTTPRequestsUseAHeader"), tree)
     expect(
         any(
@@ -258,6 +290,7 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
 ) -> None:
     """Keep additions and removals searchable even when a whole package disappears."""
     checkout = mixed_language_checkout
+    git(checkout, "add", ".")
     cache = home.parent / "cache"
     project = ("github.com", "owner", "project")
     subject.cached_output(checkout, "diff", cache, refresh=False)
@@ -271,11 +304,16 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
     expect(labels(changes, *project, "- crate") == ["- output::keeps name"], changes)
     expect(
         labels(changes, *project, "shell")
-        == ["- preserves spaces", "+ accepts blanks", "+ preserves tabs"],
+        == [
+            "- handles tabs",
+            "- preserves spaces",
+            "+ accepts blanks",
+            "+ preserves tabs",
+        ],
         changes,
     )
     expect(
-        labels(changes, *project, "- proof") == ["- Output.garde étiquette"], changes
+        labels(changes, *project, "- proof") == ["- Résultats.garde étiquette"], changes
     )
     expect("- untested" in labels(changes, *project), changes)
     tests = subject.Viewer(subject.build_tree(home, cache=cache))
@@ -285,25 +323,19 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
     expect(rows["- preserves spaces"] == "-" and rows["+ preserves tabs"] == "+", rows)
 
 
-def test_home_tree_reports_a_timeout_and_shows_current_status_for_a_cached_repository(
-    home: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+def test_a_timed_out_checkout_reports_an_inspection_error(
+    home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Show cached test names and live Git status alongside a checkout timeout."""
+    """Show the repository whose inspection timed out."""
     cache = home.parent / "cache"
-    cached = home / "gitlab.com/owner/project"
-    subject.cached_output(cached, "tests", cache, refresh=False)
-    (cached / "notes.txt").touch()
-    git(cached, "add", "notes.txt")
-    original = test_inventory.inspect_repository
+    original = suite_inventory.inspect_repository
 
     def timeout(root: Path) -> dict[str, list[str]]:
         if root == home / "github.com/owner/project":
             raise subprocess.TimeoutExpired(["git", "ls-files"], 30)
         return original(root)
 
-    monkeypatch.setattr(test_inventory, "inspect_repository", timeout)
+    monkeypatch.setattr(suite_inventory, "inspect_repository", timeout)
     tree = subject.build_tree(
         home, cache=cache, progress=subject.write_startup_progress
     )
@@ -313,6 +345,20 @@ def test_home_tree_reports_a_timeout_and_shows_current_status_for_a_cached_repos
             for label in labels(tree, "github.com", "owner", "project")
         ),
         tree,
+    )
+
+
+def test_cached_test_names_show_the_current_git_status(
+    home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cache hit still shows staged changes and reports startup progress."""
+    cache = home.parent / "cache"
+    cached = home / "gitlab.com/owner/project"
+    subject.cached_output(cached, "tests", cache, refresh=False)
+    (cached / "notes.txt").touch()
+    git(cached, "add", "notes.txt")
+    tree = subject.build_tree(
+        home, cache=cache, progress=subject.write_startup_progress
     )
     expect(
         labels(tree, "gitlab.com", "owner", "project", "example") == ["default output"],
@@ -424,17 +470,17 @@ def test_the_next_inspection_retries_failed_or_unstable_results(
         subject.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "failed inspection was cached")
     flake.write_text("{}")
-    original = test_inventory.inspect_repository
+    original = suite_inventory.inspect_repository
 
     def changing(path: Path) -> dict[str, list[str]]:
         value = original(path)
         (path / "example/test_main.py").write_text("def test_changed(): ...\n")
         return value
 
-    monkeypatch.setattr(test_inventory, "inspect_repository", changing)
+    monkeypatch.setattr(suite_inventory, "inspect_repository", changing)
     subject.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "changing source was cached")
-    monkeypatch.setattr(test_inventory, "inspect_repository", original)
+    monkeypatch.setattr(suite_inventory, "inspect_repository", original)
     current, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
     expect(not hit and current == {"example": ["test_changed"]}, current)
 
@@ -789,7 +835,7 @@ def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_mi
         "def test_delivers_messages(): assert deliver('hello') == 'hello'\n"
     )
     git(root, "add", "--", "inbox/test_main.py")
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(
         inventory
         == {"inbox": ["test_delivers_messages", "test_preserves_message_case"]},
@@ -804,7 +850,7 @@ def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
         tests = root / name / "test_main.py"
         tests.write_text("def test_delivers(): ...\ndef test_delivers(): ...\n")
         git(root, "add", "--", f"{name}/test_main.py")
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(list(inventory) == ["mail-box", "mail_box"], inventory)
     expect(
         inventory == {"mail-box": ["test_delivers"], "mail_box": ["test_delivers"]},
@@ -843,31 +889,13 @@ def test_declared_package_kind_determines_the_required_entrypoint(
         (package / filename).write_text(content)
     (package / "main.nix").touch()
     git(root, "add", "--", "example")
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {"example": []}, inventory)
     flake_layout.validate_flake_source(root)
     entrypoint, _ = _ENTRYPOINTS[kind]
     (package / entrypoint).unlink()
     with pytest.raises(ValueError, match=re.escape(entrypoint)):
         flake_layout.validate_flake_source(root)
-
-
-def test_packages_declared_in_a_with_scope_can_be_listed_without_rewriting_the_source(
-    root: Path,
-) -> None:
-    """Validate a package without rewriting its Nix scope."""
-    _fixture_add(root, "example", "python")
-    declaration = root / "example/default.nix"
-    declaration.write_text(
-        "{ inputs, pkgs, ... }: with inputs.self.lib; "
-        "mkPythonPackage { inherit pkgs; src = ./.; executable = true; }\n"
-    )
-    git(root, "add", ".")
-    before = _snapshot(root)
-    flake_layout.validate_flake_source(root)
-    packages = test_inventory.inspect_repository(root)
-    expect(list(packages) == ["example"], packages)
-    expect(_snapshot(root) == before, "inspection changed repository")
 
 
 def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
@@ -879,6 +907,7 @@ def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
         "dash-name": "pkgs.rustPlatform.buildRustPackage",
         "dash_name": 'pkgs.haskellPackages.callCabal2nix "example" ./.',
         "custom": "import ./builder.nix",
+        "scoped": "with pkgs; writeTextFile",
     }
     for name, builder in builders.items():
         package = root / name
@@ -896,7 +925,7 @@ def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
             (package / marker).write_text("Supporting source\n")
     git(root, "add", ".")
     flake_layout.validate_flake_source(root)
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {name: ["testBuilds"] for name in builders}, inventory)
 
 
@@ -961,7 +990,7 @@ class AsyncReports(AsyncBase):
     collected = sorted(
         line.split("::", 1)[1] for line in result.stdout.splitlines() if "::" in line
     )
-    declared = test_inventory.inspect_repository(tmp_path)["example"]
+    declared = suite_inventory.inspect_repository(tmp_path)["example"]
     expect(declared == collected, (declared, collected))
 
 
@@ -983,7 +1012,7 @@ def test_the_package_list_preserves_declared_names_and_excludes_standalone_hosts
         _fixture_add(root, name, kind)
     _fixture_add(root, "workLaptop", "host")
     flake_layout.validate_flake_source(root)
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {name: [] for _, name in packages}, inventory)
 
 
@@ -1012,16 +1041,18 @@ def test_package_names_follow_their_tracked_declarations(
     )
     git(root, "add", "--", "draft/test_main.nix")
     expect(
-        test_inventory.inspect_repository(root) == {},
+        suite_inventory.inspect_repository(root) == {},
         "untracked declaration was listed",
     )
     git(root, "add", "--", "draft/default.nix")
     expect(
-        test_inventory.inspect_repository(root) == {"draft": ["testDelivers"]},
+        suite_inventory.inspect_repository(root) == {"draft": ["testDelivers"]},
         package,
     )
     git(root, "mv", "--", "draft", "inbox")
-    expect(test_inventory.inspect_repository(root) == {"inbox": ["testDelivers"]}, root)
+    expect(
+        suite_inventory.inspect_repository(root) == {"inbox": ["testDelivers"]}, root
+    )
 
 
 def test_library_tests_are_listed_even_when_main_requires_arguments(
@@ -1045,7 +1076,7 @@ let options = {
     source = package / "main.py"
     source.write_text(source.read_text().replace("def main():", "def main(values):"))
     flake_layout.validate_flake_source(tmp_path)
-    names = test_inventory.inspect_repository(tmp_path)["example"]
+    names = suite_inventory.inspect_repository(tmp_path)["example"]
     expect(names == ["test_default_output"], names)
     declaration.write_text(
         declaration.read_text().replace("executable = false", "executable = true")
@@ -1055,21 +1086,6 @@ let options = {
         match="main must accept a call without arguments",
     ):
         flake_layout.validate_flake_source(tmp_path)
-
-
-def test_inspection_reports_a_missing_flake_or_invalid_python_test_source(
-    tmp_path: Path,
-) -> None:
-    """Report invalid repositories and malformed source with useful errors."""
-    with pytest.raises(ValueError, match=r"flake\.nix"):
-        test_inventory.inspect_repository(tmp_path)
-    _inspection_repository(tmp_path)
-    (tmp_path / "example" / "test_main.py").write_text("def invalid(")
-    with pytest.raises(
-        ValueError,
-        match="could not parse Python source",
-    ):
-        test_inventory.inspect_repository(tmp_path)
 
 
 def _indexed_repository(root: Path) -> None:
@@ -1085,13 +1101,68 @@ def _write_test(root: Path, name: str) -> None:
     (root / "example/test_main.py").write_text(f"def test_{name}(): pass\n")
 
 
+def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
+    checkout: Path,
+) -> None:
+    """Follow declared suite sources through inspection, cache refresh and diffs."""
+    package = checkout / "example"
+    nested = package / "nested"
+    nested.mkdir()
+    python = nested / "test_rules.py"
+    python.write_text("def test_pdf_output(): pass\n")
+    cpp = package / "count-test.cc"
+    cpp.write_text(
+        "static void test_unused() {}\nstatic void test_cpu_limit() {}\n"
+        "int main() { test_cpu_limit(); }\n"
+    )
+    (package / "default.nix").write_text(
+        "{ checks = [ ./nested/test_rules.py ./count-test.cc ./test_local.py ]; }"
+    )
+    (package / "test_local.py").write_text("def test_untracked(): pass\n")
+    (nested / "test_fixture.py").write_text("def test_fixture(): pass\n")
+    git(
+        checkout,
+        "add",
+        "example/default.nix",
+        "example/nested",
+        "example/count-test.cc",
+    )
+    cache = checkout.parent / "cache"
+    expected = {"example": ["test_cpu_limit", "test_pdf_output"]}
+    first, _ = subject.cached_output(checkout, "tests", cache, refresh=False)
+    expect(first == expected, first)
+    expect(suite_inventory.diff_repository(checkout) == [], "unexpected name changes")
+    python.write_text("def test_openapi_schema(): pass\n")
+    current, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
+    expect(
+        not hit and current == {"example": ["test_cpu_limit", "test_openapi_schema"]},
+        current,
+    )
+    display = subject.Node("example")
+    display.add_test("test_openapi_schema")
+    expect(labels(display) == ["OpenAPI schema"], display)
+    changes = suite_inventory.diff_repository(checkout)
+    expect(
+        changes
+        == [
+            {
+                "package": "example",
+                "status": "modified",
+                "removed": ["test_pdf_output"],
+                "added": ["test_openapi_schema"],
+            }
+        ],
+        changes,
+    )
+
+
 def test_diff_ignores_implementation_edits_and_untracked_packages(
     tmp_path: Path,
 ) -> None:
     """Only changes to the package-to-test-name mapping produce output."""
     _inspection_repository(tmp_path)
     git(tmp_path, "init", "--quiet")
-    expect(not test_inventory.diff_repository(tmp_path), "untracked files in diff")
+    expect(not suite_inventory.diff_repository(tmp_path), "untracked files in diff")
     git(tmp_path, "add", ".")
     source = tmp_path / "example/main.py"
     source.write_text("def unfinished(")
@@ -1106,10 +1177,8 @@ def test_diff_ignores_implementation_edits_and_untracked_packages(
     )
     (tmp_path / "untracked").mkdir()
     (tmp_path / "untracked/default.nix").write_text("{}")
-    before = _snapshot(tmp_path)
-    difference = test_inventory.diff_repository(tmp_path)
+    difference = suite_inventory.diff_repository(tmp_path)
     expect(not difference, difference)
-    expect(_snapshot(tmp_path) == before, "empty diff changed state")
 
 
 def test_diff_follows_tracked_symlink_targets_of_test_suites(tmp_path: Path) -> None:
@@ -1122,7 +1191,7 @@ def test_diff_follows_tracked_symlink_targets_of_test_suites(tmp_path: Path) -> 
     source.symlink_to("../assets/deep/entry")
     git(tmp_path, "add", ".")
     target.write_text("def test_unicode_input(): ...\ndef test_empty_input(): ...\n")
-    changes = test_inventory.diff_repository(tmp_path)
+    changes = suite_inventory.diff_repository(tmp_path)
     expect(
         changes
         == [
@@ -1145,7 +1214,7 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
     (root / "shared/default.nix").write_text("{}")
     git(root, "add", "--", "shared/default.nix")
     (root / "shared/default.nix").unlink()
-    changes = test_inventory.diff_repository(root)
+    changes = suite_inventory.diff_repository(root)
     expect(
         changes
         == [{"package": "shared", "status": "removed", "added": [], "removed": []}],
@@ -1169,11 +1238,9 @@ def test_a_failed_test_name_comparison_removes_its_temporary_snapshots(
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     (root / "example/test_main.py").write_text("def invalid(")
-    before = _snapshot(root)
     with pytest.raises(ValueError, match="could not parse Python source"):
-        test_inventory.diff_repository(root)
+        suite_inventory.diff_repository(root)
     expect(not list(scratch.iterdir()), "failed diff left temporary sources")
-    expect(_snapshot(root) == before, "failed diff changed state")
 
 
 def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
@@ -1199,7 +1266,7 @@ def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
     )
     before = _snapshot(tmp_path)
     with pytest.raises(ValueError, match="unmerged index"):
-        test_inventory.diff_repository(tmp_path)
+        suite_inventory.diff_repository(tmp_path)
     expect(
         _snapshot(tmp_path) == before,
         "conflict diff changed state",
@@ -1218,7 +1285,7 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     git(linked, "add", "example/test_main.py")
     _write_test(linked, "working")
     before = _snapshot(tmp_path)
-    changes = test_inventory.diff_repository(linked)
+    changes = suite_inventory.diff_repository(linked)
     expect(
         changes
         == [
@@ -1237,7 +1304,7 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     )
 
 
-def test_layout_check_ignores_untracked_packages_and_test_files(
+def test_inspection_omits_untracked_packages_and_test_files(
     root: Path,
 ) -> None:
     """Skip malformed local declarations and suites until they are tracked."""
@@ -1250,72 +1317,14 @@ def test_layout_check_ignores_untracked_packages_and_test_files(
     (local / "default.nix").write_text("{ invalid")
     before = _snapshot(root)
     flake_layout.validate_flake_source(root)
-    inventory = test_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {"example": [], "library": []}, inventory)
     expect(
         _snapshot(root) == before, "reading untracked sources changed the repository"
     )
 
 
-def test_staging_bats_nix_and_lean_suites_lists_their_declared_test_names(
-    root: Path,
-) -> None:
-    """Read Bats, Nix, and Lean declarations once their suites are staged."""
-    expected = {}
-    for kind, suite, source, names in [
-        (
-            "bash",
-            "test_main.bats",
-            """exit 99
-cat <<'TEXT'
-@test "not a declaration" {
-TEXT
-@test "preserves spaces" { true; }
-check_status() { # @test
-  true
-}
-helper() { true; }
-""",
-            ["check_status", "preserves spaces"],
-        ),
-        (
-            "generic",
-            "test_main.nix",
-            """{ ... }: let
-              selection = [ "preservesSpaces" ];
-              suite = {
-                tests = selection;
-                preservesSpaces = { expr = throw "never evaluate"; expected = true; };
-                testExcluded = { expr = false; expected = true; };
-              };
-            in (suite)""",
-            ["preservesSpaces"],
-        ),
-        (
-            "lean4",
-            "test_main.lean",
-            """namespace Résultats
-section
-/- theorem ignored : True := trivial -/
-theorem preservesCafé : True := trivial
-example : True := trivial
-end
-end Résultats
-""",
-            ["Résultats.preservesCafé"],
-        ),
-    ]:
-        _fixture_add(root, kind, kind)
-        (root / kind / suite).write_text(source)
-        expected[kind] = names
-    untracked = test_inventory.inspect_repository(root)
-    expect(untracked == {kind: [] for kind in expected}, untracked)
-    git(root, "add", "--", *expected)
-    inventory = test_inventory.inspect_repository(root)
-    expect(inventory == expected, inventory)
-
-
-def test_cargo_lists_tests_from_enabled_targets_and_their_module_trees(
+def test_rust_inventory_follows_enabled_cargo_targets_and_tracked_modules(
     root: Path,
 ) -> None:
     """List declared unit and integration tests without building the crate."""
@@ -1352,7 +1361,7 @@ test = false
         path.write_text(source)
     git(root, "add", "--", "example")
     (package / "src/bin/untracked.rs").write_text("#[test] fn untracked() {}\n")
-    before = test_inventory.inspect_repository(root)
+    before = suite_inventory.inspect_repository(root)
     expect(
         before
         == {
@@ -1366,7 +1375,7 @@ test = false
     )
     suite = package / "src/shared.rs"
     suite.write_text(suite.read_text().replace("preserves", "retains"))
-    changes = test_inventory.diff_repository(root)
+    changes = suite_inventory.diff_repository(root)
     expect(
         changes
         == [

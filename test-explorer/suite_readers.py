@@ -1,5 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Read test names from Bats, Nix and Lean test suites."""
+"""Read test names from Bats, C++, Nix and Lean test suites."""
 
 # ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 
-def bats_names(path: Path) -> set[str]:
+def bats_test_names(path: Path) -> set[str]:
     """Read top-level Bats declarations without sourcing the shell program."""
     source = path.read_bytes()
     parsed = subprocess.run(
@@ -48,7 +48,7 @@ def bats_names(path: Path) -> set[str]:
     return names
 
 
-def nix_names(path: Path) -> set[str]:
+def nix_test_names(path: Path) -> set[str]:
     """Read named cases from the returned Nix suite and its optional selection."""
     document = nix_syntax.parse(path.read_bytes(), str(path))
     suite = nix_syntax.call_package_body(document)
@@ -85,7 +85,7 @@ def nix_names(path: Path) -> set[str]:
     )
 
 
-def lean_names(path: Path) -> set[str]:
+def lean_test_names(path: Path) -> set[str]:
     """Read theorem declarations under their Lean namespaces in the test module."""
     source = path.read_bytes()
 
@@ -119,4 +119,36 @@ def lean_names(path: Path) -> set[str]:
                 visit(child, prefix)
 
     visit(tree.root_node, "")
+    return names
+
+
+def cpp_test_names(path: Path) -> set[str]:
+    """Read named test functions called by a standalone C++ runner."""
+    source = path.read_bytes()
+    root = get_parser("cpp").parse(source).root_node
+    functions = {}
+    for definition in root.named_children:
+        if definition.type != "function_definition":
+            continue
+        declarator = definition.child_by_field_name("declarator")
+        identifier = (
+            declarator.child_by_field_name("declarator") if declarator else None
+        )
+        if identifier is not None and identifier.type == "identifier":
+            functions[source[identifier.start_byte : identifier.end_byte].decode()] = (
+                definition
+            )
+    if "main" not in functions:
+        return set()
+    names = set()
+    pending = [functions["main"]]
+    while pending:
+        node = pending.pop()
+        if node.type == "call_expression" and (
+            callee := node.child_by_field_name("function")
+        ):
+            name = source[callee.start_byte : callee.end_byte].decode()
+            if name.startswith("test_") and name in functions:
+                names.add(name)
+        pending.extend(node.named_children)
     return names

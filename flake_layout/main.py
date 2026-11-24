@@ -76,14 +76,10 @@ def read_regular(path: Path) -> bytes | None:
 
 
 def source_paths(root: Path) -> set[Path]:
-    """Select top-level package files and indexed Rust sources for module discovery."""
+    """Select root files and files directly inside top-level directories."""
     if (root / ".git").exists():
-        entries = git(root, "ls-files", "-z")
-        return {
-            Path(item)
-            for item in entries.split("\0")
-            if item and (item.count("/") <= 1 or item.endswith(".rs"))
-        }
+        entries = git(root, "ls-files", "-z", "--", ":(glob)*", ":(glob)*/*")
+        return {Path(item) for item in entries.split("\0") if item}
     paths: set[Path] = set()
     for directory, directories, filenames in root.walk():
         if directory != root:

@@ -11,18 +11,23 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
-from test_explorer.rust import cargo_names
-from test_explorer.test_names import bats_names, lean_names, nix_names
+from test_explorer.rust import rust_test_names
+from test_explorer.suite_readers import (
+    bats_test_names,
+    cpp_test_names,
+    lean_test_names,
+    nix_test_names,
+)
 
 import flake_layout
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 TEST_READERS = {
-    "bash": bats_names,
-    "generic": nix_names,
-    "lean4": lean_names,
+    "bash": bats_test_names,
+    "generic": nix_test_names,
+    "lean4": lean_test_names,
     "python": flake_layout.python_test_names,
 }
 
@@ -39,32 +44,81 @@ class PackageChange(TypedDict):
     removed: list[str]
 
 
+def _suite_reader(path: Path) -> Callable[[Path], set[str]] | None:
+    """Recognize suite sources referenced directly by a package build."""
+    if path.suffix == ".py" and path.name.startswith("test_"):
+        return flake_layout.python_test_names
+    if path.suffix in {".cc", ".cpp", ".cxx"} and path.stem.endswith(
+        ("-test", "_test")
+    ):
+        return cpp_test_names
+    if path.suffix == ".bats":
+        return bats_test_names
+    return None
+
+
+def _declared_suites(
+    package: flake_layout.Package,
+) -> Iterator[tuple[Path, Callable[[Path], set[str]]]]:
+    """Follow literal suite paths inside this package, including Nix interpolations."""
+    pending = [package.declaration.root]
+    while pending:
+        node = pending.pop()
+        if node.type == "path_expression" and all(
+            child.type == "path_fragment" for child in node.named_children
+        ):
+            value = package.declaration.text(node)
+            path = Path(value)
+            if (
+                value.startswith("./")
+                and ".." not in path.parts
+                and (reader := _suite_reader(path))
+            ):
+                yield package.root / path, reader
+        else:
+            pending.extend(node.named_children)
+
+
 def inspect_repository(root: Path) -> dict[str, list[str]]:
     """Map each declared package to its sorted, statically named tests."""
     if not (root / "flake.nix").is_file():
         message = f"{root}: missing flake.nix"
         raise ValueError(message)
-    paths = flake_layout.source_paths(root)
+    tracked = (
+        {
+            Path(name)
+            for name in flake_layout.git(root, "ls-files", "-z").split("\0")
+            if name
+        }
+        if (root / ".git").exists()
+        else None
+    )
+    paths = tracked if tracked is not None else flake_layout.source_paths(root)
     packages, _ = flake_layout.detect_packages(root, paths)
     inventory: dict[str, list[str]] = {}
-    tracked_rust = None
     for package in packages:
         name = package.root.name
         names: set[str] = set()
-        if extract := TEST_READERS.get(package.kind):
+        suites = dict(_declared_suites(package))
+        if reader := TEST_READERS.get(package.kind):
             suite = package.root / flake_layout.PACKAGE_TEST_FILES[package.kind]
-            if suite.relative_to(root) in paths and suite.is_file():
-                names.update(extract(suite))
+            suites[suite] = reader
+        for suite, read_names in suites.items():
+            if (
+                tracked is None or suite.relative_to(root) in tracked
+            ) and suite.is_file():
+                names.update(read_names(suite))
         if (
             package.kind == "generic"
             and Path(name) / "Cargo.toml" in paths
             and (package.root / "Cargo.toml").is_file()
         ):
-            if tracked_rust is None and (root / ".git").exists():
-                tracked_rust = {
-                    root / source for source in paths if source.suffix == ".rs"
-                }
-            names.update(cargo_names(package.root, tracked_rust))
+            tracked_rust = (
+                None
+                if tracked is None
+                else {root / path for path in tracked if path.suffix == ".rs"}
+            )
+            names.update(rust_test_names(package.root, tracked_rust))
         inventory[name] = sorted(names)
     return inventory
 
@@ -102,6 +156,7 @@ def diff_inputs(root: Path) -> list[tuple[str, str, Path]]:
         for mode, oid, path in files
         if path == Path("flake.nix")
         or (len(path.parent.parts) == 1 and path.name in filenames)
+        or _suite_reader(path) is not None
         or (path.suffix == ".rs" and Path(path.parts[0]) in manifests)
     ]
     if any(mode == "120000" or (root / path).is_symlink() for mode, _, path in inputs):

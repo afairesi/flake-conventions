@@ -21,8 +21,14 @@ pkgs.stdenv.mkDerivation rec {
     platforms = builtins.attrNames hashes;
   };
   nativeBuildInputs = pkgs.lib.optionals hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
-  nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
+  nativeInstallCheckInputs = [
+    pkgs.bats
+    pkgs.versionCheckHook
+  ];
   pname = baseNameOf ./.;
+  postInstallCheck = ''
+    bats ${./test_main.bats}
+  '';
   sourceRoot = ".";
   src = pkgs.fetchurl {
     hash = hashes.${hostPlatform.system};

@@ -121,7 +121,7 @@ pkgs.runCommand "afairesi-consumer-contract"
     }/bin/python - <<'PY'
     from pathlib import Path
     from flake_layout import validate_flake_source
-    from test_explorer.test_inventory import inspect_repository
+    from test_explorer.suite_inventory import inspect_repository
 
     root = Path("native-source").resolve()
     validate_flake_source(root)
