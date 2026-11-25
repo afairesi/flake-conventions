@@ -72,15 +72,11 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
 
     monkeypatch.setattr(os, "scandir", guarded)
     sources = flake_layout.source_paths(root)
-    _expect(Path("example/default.nix") in sources, sources)
-    _expect(not any(path.is_relative_to("example/assets") for path in sources), sources)
+    if Path("example/default.nix") not in sources:
+        raise AssertionError(sources)
+    if any(path.is_relative_to("example/assets") for path in sources):
+        raise AssertionError(sources)
     flake_layout.validate_flake_source(root)
-
-
-def _expect(condition: bool, detail: object) -> None:  # noqa: FBT001
-    """Report an invariant failure with its observed state."""
-    if not condition:
-        raise AssertionError(detail)
 
 
 @pytest.fixture
@@ -106,9 +102,9 @@ def test_layout_check_rejects_a_tracked_python_package_initializer(
         flake_layout.validate_flake_source(root)
     _git(root, "diff", "--cached", "--exit-code", staged)
     _git(root, "diff", "--exit-code", staged)
-    _expect(
-        not _git(root, "ls-files", "--others"), "validation created untracked files"
-    )
+    untracked = _git(root, "ls-files", "--others")
+    if untracked:
+        raise AssertionError(untracked)
 
 
 @pytest.mark.parametrize(

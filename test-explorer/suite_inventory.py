@@ -20,9 +20,12 @@ from test_explorer.suite_readers import (
 )
 
 import flake_layout
+import nix_syntax
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+    from tree_sitter import Node
 
 TEST_READERS = {
     "bash": bats_test_names,
@@ -35,13 +38,81 @@ TEST_READERS = {
 type PackageStatus = Literal["added", "removed", "modified"]
 
 
+class PackageInfo(TypedDict):
+    """Display metadata and statically discovered tests for a package."""
+
+    description: str
+    tests: list[str]
+
+
 class PackageChange(TypedDict):
     """Changes to one package and its named tests between the index and worktree."""
 
     package: str
+    description: str
     status: PackageStatus
     added: list[str]
     removed: list[str]
+
+
+def _description(
+    document: nix_syntax.Document, node: Node | None, path: tuple[str, ...]
+) -> str:
+    """Read a one-line description from dotted or nested Nix bindings."""
+    if node is None:
+        return ""
+    if not path:
+        if node.type == "indented_string_expression" and all(
+            child.type == "string_fragment" for child in node.named_children
+        ):
+            value = document.text(node)[2:-2]
+        else:
+            value = nix_syntax.string_value(document, node) or ""
+        return " ".join(value.split())
+    if node.type not in {"attrset_expression", "rec_attrset_expression"}:
+        return ""
+    bindings = nix_syntax.binding_set(node)
+    for binding in bindings.named_children if bindings else ():
+        attrpath = binding.child_by_field_name("attrpath")
+        if attrpath is None:
+            continue
+        parts = nix_syntax.static_attrpath(document, attrpath)
+        if parts and path[: len(parts)] == parts:
+            value_node = nix_syntax.resolve_expression(
+                document, binding.child_by_field_name("expression")
+            )
+            return _description(document, value_node, path[len(parts) :])
+    return ""
+
+
+def flake_description(root: Path) -> str:
+    """Read optional metadata even when the home checkout has no flake."""
+    path = root / "flake.nix"
+    try:
+        if not path.is_file():
+            return ""
+        document = nix_syntax.parse(path.read_bytes(), str(path))
+    except OSError, ValueError:
+        return ""
+    return _description(
+        document,
+        nix_syntax.resolve_expression(document, document.root),
+        ("description",),
+    )
+
+
+def _package_description(document: nix_syntax.Document) -> str:
+    """Read meta.description from the returned set or the builder's arguments."""
+    node = nix_syntax.call_package_body(document)
+    if node is not None and node.type == "apply_expression":
+        node = nix_syntax.resolve_expression(
+            document, node.child_by_field_name("argument")
+        )
+        if node is not None and node.type == "function_expression":
+            node = nix_syntax.resolve_expression(
+                document, node.child_by_field_name("body")
+            )
+    return _description(document, node, ("meta", "description"))
 
 
 def _suite_reader(path: Path) -> Callable[[Path], set[str]] | None:
@@ -79,8 +150,8 @@ def _declared_suites(
             pending.extend(node.named_children)
 
 
-def inspect_repository(root: Path) -> dict[str, list[str]]:
-    """Map each declared package to its sorted, statically named tests."""
+def inspect_packages(root: Path) -> dict[str, PackageInfo]:
+    """Read descriptions and test names from the same package declarations."""
     if not (root / "flake.nix").is_file():
         message = f"{root}: missing flake.nix"
         raise ValueError(message)
@@ -95,7 +166,7 @@ def inspect_repository(root: Path) -> dict[str, list[str]]:
     )
     paths = tracked if tracked is not None else flake_layout.source_paths(root)
     packages, _ = flake_layout.detect_packages(root, paths)
-    inventory: dict[str, list[str]] = {}
+    inventory: dict[str, PackageInfo] = {}
     for package in packages:
         name = package.root.name
         names: set[str] = set()
@@ -119,7 +190,9 @@ def inspect_repository(root: Path) -> dict[str, list[str]]:
                 else {root / path for path in tracked if path.suffix == ".rs"}
             )
             names.update(rust_test_names(package.root, tracked_rust))
-        inventory[name] = sorted(names)
+        inventory[name] = PackageInfo(
+            description=_package_description(package.declaration), tests=sorted(names)
+        )
     return inventory
 
 
@@ -169,7 +242,7 @@ def _snapshot_inventory(
     files: list[tuple[str, str, Path]],
     *,
     working_tree: bool = False,
-) -> dict[str, list[str]]:
+) -> dict[str, PackageInfo]:
     """Inspect tracked sources in a temporary directory without checkout filters."""
     with tempfile.TemporaryDirectory(prefix="test-explorer-diff-") as directory:
         snapshot = Path(directory)
@@ -206,9 +279,7 @@ def _snapshot_inventory(
                     target.symlink_to(os.fsdecode(source_bytes))
                 else:
                     target.write_bytes(source_bytes)
-        return (
-            inspect_repository(snapshot) if (snapshot / "flake.nix").is_file() else {}
-        )
+        return inspect_packages(snapshot) if (snapshot / "flake.nix").is_file() else {}
 
 
 def diff_repository(root: Path) -> list[PackageChange]:
@@ -219,22 +290,23 @@ def diff_repository(root: Path) -> list[PackageChange]:
     before = _snapshot_inventory(root, files)
     after = _snapshot_inventory(root, files, working_tree=True)
     changes: list[PackageChange] = []
-    for package in sorted(before.keys() | after.keys()):
+    for package, info in sorted((before | after).items()):
         previous = before.get(package)
         current = after.get(package)
         if previous is None:
             status: PackageStatus = "added"
         elif current is None:
             status = "removed"
-        elif current != previous:
+        elif current["tests"] != previous["tests"]:
             status = "modified"
         else:
             continue
-        old_names = set(previous or ())
-        new_names = set(current or ())
+        old_names = set(previous["tests"] if previous else ())
+        new_names = set(current["tests"] if current else ())
         changes.append(
             PackageChange(
                 package=package,
+                description=info["description"],
                 status=status,
                 added=sorted(new_names - old_names),
                 removed=sorted(old_names - new_names),

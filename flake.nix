@@ -1,4 +1,5 @@
 {
+  description = "Turn package directories into Nix flake packages and checks";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     treefmt-nix = {

@@ -141,7 +141,7 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
     expect(
         all(
             colors["▾ " + label] == "~"
-            for label in (str(home), *project, "example (1)")
+            for label in (str(home), *project, "example: Example (1)")
         ),
         colors,
     )
@@ -235,8 +235,8 @@ def test_tracked_bats_nix_lean_and_rust_tests_are_searchable_under_their_package
         "proof": ["Résultats.garde étiquette"],
         "crate": ["output::keeps name"],
     }
-    before = suite_inventory.inspect_repository(mixed_language_checkout)
-    expect(all(before[package] == [] for package in expected), before)
+    before = suite_inventory.inspect_packages(mixed_language_checkout)
+    expect(all(not before[package]["tests"] for package in expected), before)
     git(mixed_language_checkout, "add", ".")
     tree = test_explorer.build_tree(home, cache=cache)
     viewer = test_explorer.Viewer(tree)
@@ -315,14 +315,14 @@ def test_a_timed_out_checkout_reports_an_inspection_error(
 ) -> None:
     """Show the repository whose inspection timed out."""
     cache = home.parent / "cache"
-    original = suite_inventory.inspect_repository
+    original = suite_inventory.inspect_packages
 
-    def timeout(root: Path) -> dict[str, list[str]]:
+    def timeout(root: Path) -> dict[str, suite_inventory.PackageInfo]:
         if root == home / "github.com/owner/project":
             raise subprocess.TimeoutExpired(["git", "ls-files"], 30)
         return original(root)
 
-    monkeypatch.setattr(suite_inventory, "inspect_repository", timeout)
+    monkeypatch.setattr(suite_inventory, "inspect_packages", timeout)
     tree = test_explorer.build_tree(
         home, cache=cache, progress=test_explorer.write_startup_progress
     )
@@ -409,7 +409,13 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
     git(checkout, "add", "example/test_main.py")
     staged, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     if view == "tests":
-        expect(hit and staged == changed == {"example": ["test_updated"]}, staged)
+        expect(
+            hit
+            and staged
+            == changed
+            == {"example": {"description": "Example", "tests": ["test_updated"]}},
+            staged,
+        )
     else:
         expect(not hit and staged == [], staged)
     commit(checkout, "updated")
@@ -419,7 +425,15 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
     expect(not hit, "explicit refresh used cached data")
     git(checkout, "rm", "--cached", "example/test_main.py")
     untracked, _ = test_explorer.cached_output(checkout, view, cache, refresh=False)
-    expect(untracked == ({"example": []} if view == "tests" else []), untracked)
+    expect(
+        untracked
+        == (
+            {"example": {"description": "Example", "tests": []}}
+            if view == "tests"
+            else []
+        ),
+        untracked,
+    )
 
 
 @pytest.mark.parametrize("view", ["tests", "diff"])
@@ -457,19 +471,24 @@ def test_the_next_inspection_retries_failed_or_unstable_results(
         test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "failed inspection was cached")
     flake.write_text("{}")
-    original = suite_inventory.inspect_repository
+    original = suite_inventory.inspect_packages
 
-    def changing(path: Path) -> dict[str, list[str]]:
+    def changing(path: Path) -> dict[str, suite_inventory.PackageInfo]:
         value = original(path)
         (path / "example/test_main.py").write_text("def test_changed(): ...\n")
         return value
 
-    monkeypatch.setattr(suite_inventory, "inspect_repository", changing)
+    monkeypatch.setattr(suite_inventory, "inspect_packages", changing)
     test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "changing source was cached")
-    monkeypatch.setattr(suite_inventory, "inspect_repository", original)
+    monkeypatch.setattr(suite_inventory, "inspect_packages", original)
     current, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
-    expect(not hit and current == {"example": ["test_changed"]}, current)
+    expect(
+        not hit
+        and current
+        == {"example": {"description": "Example", "tests": ["test_changed"]}},
+        current,
+    )
 
 
 def test_test_name_cache_refreshes_when_a_symlink_target_changes(
@@ -485,14 +504,20 @@ def test_test_name_cache_refreshes_when_a_symlink_target_changes(
     test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     target.write_text("def test_other(): ...\n")
     value, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
-    expect(not hit and value == {"example": ["test_other"]}, value)
+    expect(
+        not hit
+        and value == {"example": {"description": "Example", "tests": ["test_other"]}},
+        value,
+    )
 
 
 def test_directories_start_collapsed_and_can_be_expanded_with_the_keyboard() -> None:
     """Show meaningful labels and let h/l fold and unfold details without JSON noise."""
     root = test_explorer.Node("/home/test", expanded=True)
     project = root.add("github.com").add("owner").add("project")
-    test_explorer.add_tests(project, {"hello": ["test_greets_the_reader"]})
+    test_explorer.add_tests(
+        project, {"hello": {"description": "", "tests": ["test_greets_the_reader"]}}
+    )
     viewer = test_explorer.Viewer(root)
     expect(
         viewer.frame(30) == [("▾ /home/test", True, ""), ("  ▸ github.com", False, "")],
@@ -599,8 +624,20 @@ def test_selected_additions_and_removals_keep_their_colors_when_highlighted(
         tree,
         None,
         [
-            {"package": "new", "status": "added", "added": [], "removed": []},
-            {"package": "old", "status": "removed", "added": [], "removed": []},
+            {
+                "package": "new",
+                "description": "",
+                "status": "added",
+                "added": [],
+                "removed": [],
+            },
+            {
+                "package": "old",
+                "description": "",
+                "status": "removed",
+                "added": [],
+                "removed": [],
+            },
         ],
     )
     test_explorer.browse(screen, tree, "diff", Mock())
@@ -720,6 +757,10 @@ def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
 ) -> None:
     """Open the command, type a search and read the selected rule under its package."""
     checkout = home / "github.com/owner/project"
+    (home / "flake.nix").write_text('{ description = "Development checkouts"; }')
+    (checkout / "flake.nix").write_text(
+        '{ inputs.fake.description = "Dependency"; description = "Project tools"; }'
+    )
     (checkout / "example/test_main.py").write_text(
         "def test_keeps_saved_notes(): pass\n"
     )
@@ -736,11 +777,65 @@ def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
 
     rows = screen.addnstr.call_args_list
     labels = [row.args[2].strip() for row in rows]
-    expect("▾ github.com" in labels and "▾ example (1)" in labels, labels)
+    expect(f"▾ {home}: Development checkouts" in labels, labels)
+    expect(
+        "▾ project: Project tools" in labels and "▾ example: Example (1)" in labels,
+        labels,
+    )
     selected = [
         row.args[2].strip() for row in rows[:-1] if row.args[4] & curses.A_REVERSE
     ]
     expect(selected == ["keeps saved notes"], selected)
+
+
+def test_package_descriptions_follow_edits_and_removals_in_the_explorer(
+    home: Path,
+) -> None:
+    """Refresh a selected test and show the staged description for a removed package."""
+    checkout = home / "github.com/owner/project"
+    declaration = checkout / "example/default.nix"
+    cache = home.parent / "cache"
+    viewer = test_explorer.Viewer(test_explorer.build_tree(home, cache=cache))
+    expect(viewer.search("test_default_output"), viewer.root)
+    declaration.write_text(
+        "{ inputs, ... }: let summary = ''Read stored\n  notes''; in "
+        "inputs.self.lib.mkPythonPackage (_: { meta = { description = summary; }; })"
+    )
+    viewer.refresh(test_explorer.build_tree(home, cache=cache))
+    rows = viewer.frame(20)
+    expect(
+        any(selected and row.strip() == "default output" for row, selected, _ in rows),
+        rows,
+    )
+    expect(
+        any(row.strip() == "▾ example: Read stored notes (1)" for row, _, _ in rows),
+        rows,
+    )
+    expect(viewer.search("read stored"), rows)
+    expect(
+        any(
+            selected and "example: Read stored notes" in row
+            for row, selected, _ in viewer.frame(20)
+        ),
+        viewer.root,
+    )
+    diff = test_explorer.build_tree(home, view="diff", cache=cache)
+    expect(labels(diff) == ["No package or test-name changes"], diff)
+    git(checkout, "add", "example/default.nix")
+    declaration.unlink()
+    diff_viewer = test_explorer.Viewer(
+        test_explorer.build_tree(home, view="diff", cache=cache)
+    )
+    expect(diff_viewer.search("Read stored notes"), diff_viewer.root)
+    expect(
+        any(
+            selected
+            and row.strip() == "▸ - example: Read stored notes"
+            and color == "-"
+            for row, selected, color in diff_viewer.frame(20)
+        ),
+        diff_viewer.root,
+    )
 
 
 @pytest.fixture
@@ -766,12 +861,8 @@ def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_mi
         "def test_preserves_message_case(message): assert deliver(message) == message\n"
         "def test_delivers_messages(): assert deliver('hello') == 'hello'\n"
     )
-    inventory = suite_inventory.inspect_repository(checkout)
-    expect(
-        inventory
-        == {"example": ["test_delivers_messages", "test_preserves_message_case"]},
-        inventory,
-    )
+    names = suite_inventory.inspect_packages(checkout)["example"]["tests"]
+    expect(names == ["test_delivers_messages", "test_preserves_message_case"], names)
 
 
 def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
@@ -780,11 +871,10 @@ def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
         tests = _python_package(root, name) / "test_main.py"
         tests.write_text("def test_delivers(): ...\ndef test_delivers(): ...\n")
     git(root, "add", ".")
-    inventory = suite_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_packages(root)
     expect(list(inventory) == ["Mail-Box_v2", "Mail_Box-v2"], inventory)
     expect(
-        inventory
-        == {"Mail-Box_v2": ["test_delivers"], "Mail_Box-v2": ["test_delivers"]},
+        all(info["tests"] == ["test_delivers"] for info in inventory.values()),
         inventory,
     )
     with pytest.raises(ValueError, match="module names collide"):
@@ -820,8 +910,8 @@ def test_declared_package_kind_determines_the_required_entrypoint(
         (package / filename).touch()
     (package / "main.py").write_text("def main(): pass\n")
     git(root, "add", "--", "example")
-    inventory = suite_inventory.inspect_repository(root)
-    expect(inventory == {"example": []}, inventory)
+    names = suite_inventory.inspect_packages(root)["example"]["tests"]
+    expect(not names, names)
     flake_layout.validate_flake_source(root)
     (package / entrypoint).unlink()
     with pytest.raises(ValueError, match=re.escape(entrypoint)):
@@ -855,8 +945,12 @@ def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
             (package / marker).write_text("Supporting source\n")
     git(root, "add", ".")
     flake_layout.validate_flake_source(root)
-    inventory = suite_inventory.inspect_repository(root)
-    expect(inventory == {name: ["testBuilds"] for name in builders}, inventory)
+    inventory = suite_inventory.inspect_packages(root)
+    expect(
+        inventory
+        == {name: {"description": "", "tests": ["testBuilds"]} for name in builders},
+        inventory,
+    )
 
 
 def test_python_names_match_the_functions_and_methods_collected_by_pytest(
@@ -920,7 +1014,7 @@ class AsyncReports(AsyncBase):
     collected = sorted(
         line.split("::", 1)[1] for line in result.stdout.splitlines() if "::" in line
     )
-    declared = suite_inventory.inspect_repository(tmp_path)["example"]
+    declared = suite_inventory.inspect_packages(tmp_path)["example"]["tests"]
     expect(declared == collected, (declared, collected))
 
 
@@ -954,18 +1048,19 @@ def test_package_names_follow_their_tracked_declarations(
     )
     git(root, "add", "--", "draft/test_main.nix")
     expect(
-        suite_inventory.inspect_repository(root) == {},
+        suite_inventory.inspect_packages(root) == {},
         "untracked declaration was listed",
     )
     git(root, "add", "--", "draft/default.nix")
     expect(
-        suite_inventory.inspect_repository(root) == {"draft": ["testDelivers"]},
+        suite_inventory.inspect_packages(root)
+        == {"draft": {"description": "", "tests": ["testDelivers"]}},
         package,
     )
     git(root, "mv", "--", "draft", "δοκιμή.v2 + inbox")
     expect(
-        suite_inventory.inspect_repository(root)
-        == {"δοκιμή.v2 + inbox": ["testDelivers"]},
+        suite_inventory.inspect_packages(root)
+        == {"δοκιμή.v2 + inbox": {"description": "", "tests": ["testDelivers"]}},
         root,
     )
 
@@ -991,7 +1086,7 @@ let options = {
     source = package / "main.py"
     source.write_text(source.read_text().replace("def main():", "def main(values):"))
     flake_layout.validate_flake_source(tmp_path)
-    names = suite_inventory.inspect_repository(tmp_path)["example"]
+    names = suite_inventory.inspect_packages(tmp_path)["example"]["tests"]
     expect(names == ["test_default_output"], names)
     declaration.write_text(
         declaration.read_text().replace("executable = false", "executable = true")
@@ -1043,14 +1138,23 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
         "example/count-test.cc",
     )
     cache = checkout.parent / "cache"
-    expected = {"example": ["test_cpu_limit", "test_pdf_output"]}
+    expected = {
+        "example": {"description": "", "tests": ["test_cpu_limit", "test_pdf_output"]}
+    }
     first, _ = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(first == expected, first)
     expect(suite_inventory.diff_repository(checkout) == [], "unexpected name changes")
     python.write_text("def test_openapi_schema(): pass\n")
     current, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(
-        not hit and current == {"example": ["test_cpu_limit", "test_openapi_schema"]},
+        not hit
+        and current
+        == {
+            "example": {
+                "description": "",
+                "tests": ["test_cpu_limit", "test_openapi_schema"],
+            }
+        },
         current,
     )
     display = test_explorer.Node("example")
@@ -1062,6 +1166,7 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
         == [
             {
                 "package": "example",
+                "description": "",
                 "status": "modified",
                 "removed": ["test_pdf_output"],
                 "added": ["test_openapi_schema"],
@@ -1081,10 +1186,6 @@ def test_diff_ignores_implementation_edits_and_untracked_packages(
     git(tmp_path, "add", ".")
     source = tmp_path / "example/main.py"
     source.write_text("def unfinished(")
-    declaration = tmp_path / "example/default.nix"
-    declaration.write_text(
-        declaration.read_text().replace("Example", "Updated description")
-    )
     tests = tmp_path / "example/test_main.py"
     tests.write_text(
         'def test_default_output():\n    """Updated notes."""\n'
@@ -1112,6 +1213,7 @@ def test_diff_follows_tracked_symlink_targets_of_test_suites(tmp_path: Path) -> 
         == [
             {
                 "package": "example",
+                "description": "Example",
                 "status": "modified",
                 "added": ["test_empty_input", "test_unicode_input"],
                 "removed": ["test_default_output"],
@@ -1131,11 +1233,19 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
     (shared / "default.nix").write_text("{}")
     git(root, "add", "--", "shared")
     (shared / "default.nix").unlink()
-    expect(suite_inventory.inspect_repository(root) == {}, shared)
+    expect(suite_inventory.inspect_packages(root) == {}, shared)
     changes = suite_inventory.diff_repository(root)
     expect(
         changes
-        == [{"package": "shared", "status": "removed", "added": [], "removed": []}],
+        == [
+            {
+                "package": "shared",
+                "description": "",
+                "status": "removed",
+                "added": [],
+                "removed": [],
+            }
+        ],
         changes,
     )
     with pytest.raises(
@@ -1213,6 +1323,7 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
         == [
             {
                 "package": "example",
+                "description": "Example",
                 "status": "modified",
                 "added": ["test_working"],
                 "removed": ["test_staged"],
@@ -1237,8 +1348,15 @@ def test_inspection_omits_untracked_packages_and_test_files(
     local.mkdir()
     (local / "default.nix").write_text("{ invalid")
     flake_layout.validate_flake_source(root)
-    inventory = suite_inventory.inspect_repository(root)
-    expect(inventory == {"example": [], "library": []}, inventory)
+    inventory = suite_inventory.inspect_packages(root)
+    expect(
+        inventory
+        == {
+            "example": {"description": "Example", "tests": []},
+            "library": {"description": "", "tests": []},
+        },
+        inventory,
+    )
 
 
 def test_rust_inventory_follows_enabled_cargo_targets_and_tracked_modules(
@@ -1278,17 +1396,15 @@ test = false
         path.write_text(source)
     git(root, "add", "--", "example")
     (package / "src/bin/untracked.rs").write_text("#[test] fn untracked() {}\n")
-    before = suite_inventory.inspect_repository(root)
+    names = suite_inventory.inspect_packages(root)["example"]["tests"]
     expect(
-        before
-        == {
-            "example": [
-                "prints_output",
-                "tests::accepts_input",
-                "tests::shared::nested::preserves_spaces",
-            ]
-        },
-        before,
+        names
+        == [
+            "prints_output",
+            "tests::accepts_input",
+            "tests::shared::nested::preserves_spaces",
+        ],
+        names,
     )
     suite = package / "src/shared.rs"
     suite.write_text(suite.read_text().replace("preserves", "retains"))
@@ -1298,6 +1414,7 @@ test = false
         == [
             {
                 "package": "example",
+                "description": "",
                 "status": "modified",
                 "added": ["tests::shared::nested::retains_spaces"],
                 "removed": ["tests::shared::nested::preserves_spaces"],

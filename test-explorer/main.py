@@ -35,9 +35,6 @@ type View = Literal["tests", "diff"]
 READ_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
 
 
-type Payload = dict[str, list[str]] | list[suite_inventory.PackageChange]
-
-
 def _path_stamp(path: Path) -> bytes:
     """Include changes to a file or link target and track directory identity."""
     try:
@@ -123,11 +120,15 @@ def _is_cached_view(value: object, view: View) -> bool:
     """Check the JSON payload before reusing a cached view."""
     if view == "tests":
         return isinstance(value, dict) and all(
-            _is_name_list(names) for names in value.values()
+            isinstance(package, dict)
+            and isinstance(package.get("description"), str)
+            and _is_name_list(package.get("tests"))
+            for package in value.values()
         )
     return isinstance(value, list) and all(
         isinstance(change, dict)
         and isinstance(change.get("package"), str)
+        and isinstance(change.get("description"), str)
         and change.get("status") in ("added", "removed", "modified")
         and _is_name_list(change.get("added"))
         and _is_name_list(change.get("removed"))
@@ -155,7 +156,9 @@ def _write_cache_entry(path: Path, value: object) -> None:
 
 def cached_output(
     root: Path, view: View, cache: Path, *, refresh: bool
-) -> tuple[Payload, bool]:
+) -> tuple[
+    dict[str, suite_inventory.PackageInfo] | list[suite_inventory.PackageChange], bool
+]:
     """Reuse stable inspections for the same installed explorer, checkout and view."""
     key = hashlib.sha256(
         json.dumps([str(Path(__file__).resolve()), str(root), view]).encode()
@@ -172,7 +175,7 @@ def cached_output(
             ):
                 return saved["value"], True
     value = (
-        suite_inventory.inspect_repository(root)
+        suite_inventory.inspect_packages(root)
         if view == "tests"
         else suite_inventory.diff_repository(root)
     )
@@ -208,6 +211,7 @@ def _repository_node(
         ):
             message = "The registered path is not a repository checkout within home."
             raise ValueError(message)
+        node.description = suite_inventory.flake_description(root)
         value, hit = cached_output(root, view, cache, refresh=refresh)
         if isinstance(value, dict):
             packages = value
@@ -376,6 +380,12 @@ class Node:
     change: str = ""
     detail: str = ""
     source_label: str = ""
+    description: str = ""
+
+    @property
+    def display_label(self) -> str:
+        """Append the optional description to the row's stable label."""
+        return f"{self.label}: {self.description}" if self.description else self.label
 
     def add(self, label: str, *, change: str = "") -> Node:
         """Append a folded child and return it for further details."""
@@ -401,7 +411,9 @@ class Node:
 
 def _directory_tree(home: Path, repositories_by_path: dict[str, Node]) -> Node:
     """Group repositories that share a home directory under the same node."""
-    tree = Node(str(home), expanded=True)
+    tree = Node(
+        str(home), expanded=True, description=suite_inventory.flake_description(home)
+    )
     directories: dict[tuple[Node, str], Node] = {}
     for path, node in sorted(repositories_by_path.items()):
         parent = tree
@@ -420,30 +432,34 @@ def _directory_tree(home: Path, repositories_by_path: dict[str, Node]) -> Node:
 
 def add_tests(
     node: Node,
-    packages: dict[str, list[str]] | None,
+    packages: dict[str, suite_inventory.PackageInfo] | None,
     changes: Sequence[suite_inventory.PackageChange] = (),
 ) -> None:
     """Mark changed tests and include current tests and counts in the tests view."""
     names = {
-        package: dict.fromkeys(tests, "") for package, tests in (packages or {}).items()
+        name: dict.fromkeys(info["tests"], "")
+        for name, info in (packages or {}).items()
     }
     package_changes = {}
     for change in changes:
         package = change["package"]
-        package_changes[package] = {"added": "+", "removed": "-", "modified": "~"}[
-            change["status"]
-        ]
+        marker = {"added": "+", "removed": "-", "modified": "~"}[change["status"]]
+        package_changes[package] = marker, change["description"]
         tests = names.setdefault(package, {})
         tests.update(dict.fromkeys(change["removed"], "-"))
         tests.update(dict.fromkeys(change["added"], "+"))
     if packages is not None and not names:
         node.add("No packages")
     for package, test_changes in sorted(names.items()):
-        marker = package_changes.get(package, "")
+        marker, description = package_changes.get(package, ("", ""))
         label = f"{marker} {package}" if marker in {"+", "-"} else package
         child = node.add(label, change=marker)
+        child.description = description
         if packages is not None:
-            child.detail = str(len(packages.get(package, ())))
+            info = packages.get(package)
+            child.detail = str(len(info["tests"]) if info else 0)
+            if info:
+                child.description = info["description"]
         for name, marker in sorted(
             test_changes.items(), key=lambda item: (item[1] != "-", item[0])
         ):
@@ -503,7 +519,7 @@ class Viewer:
         needle = query.casefold()
         for match in nodes[start:] + nodes[:start]:
             if (
-                needle in match.label.casefold()
+                needle in match.display_label.casefold()
                 or needle in match.source_label.casefold()
             ):
                 node = match
@@ -589,7 +605,8 @@ class Viewer:
         ):
             marker = ("▾" if node.expanded else "▸") if node.children else " "
             label = "".join(
-                char if char.isprintable() else repr(char)[1:-1] for char in node.label
+                char if char.isprintable() else repr(char)[1:-1]
+                for char in node.display_label
             )
             if node.detail:
                 label += f" ({node.detail})"

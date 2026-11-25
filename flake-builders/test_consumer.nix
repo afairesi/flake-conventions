@@ -121,25 +121,42 @@ pkgs.runCommand "afairesi-consumer-contract"
     }/bin/python - <<'PY'
     from pathlib import Path
     from flake_layout import validate_flake_source
-    from test_explorer.suite_inventory import inspect_repository
+    from test_explorer.suite_inventory import inspect_packages
 
     root = Path("native-source").resolve()
     validate_flake_source(root)
-    inventory = inspect_repository(root)
-    assert inventory == {
-        "bash-example": [
-            "runtime dependencies are available to tests",
-            "the installed command preserves argument boundaries by name or path",
-        ],
-        "example": ["test_executable_reports_the_inherited_runtime_hook_setting"],
-        "lean-example": ["dependencyAnswerIs42"],
-        "nix-library": [
-            "testPackageKeepsItsDeclaredName",
-            "testSuiteReceivesTheConsumersPackage",
-            "testSuiteTargetsTheHostSystem",
-        ],
-        "python_native": [],
-        "rust-native": ["executable_prints_42"],
+    assert inspect_packages(root) == {
+        "bash-example": {
+            "description": "",
+            "tests": [
+                "runtime dependencies are available to tests",
+                "the installed command preserves argument boundaries by name or path",
+            ],
+        },
+        "example": {
+            "description": "Afairesi consumer contract example",
+            "tests": ["test_executable_reports_the_inherited_runtime_hook_setting"],
+        },
+        "lean-example": {
+            "description": "Lean executable consumer contract",
+            "tests": ["dependencyAnswerIs42"],
+        },
+        "nix-library": {
+            "description": "",
+            "tests": [
+                "testPackageKeepsItsDeclaredName",
+                "testSuiteReceivesTheConsumersPackage",
+                "testSuiteTargetsTheHostSystem",
+            ],
+        },
+        "python_native": {
+            "description": "A standard Python package with its own source layout",
+            "tests": [],
+        },
+        "rust-native": {
+            "description": "A standard Rust package with its own Cargo layout",
+            "tests": ["executable_prints_42"],
+        },
     }
     PY
     test "$(cat ${consumer.packages.${system}.nix-library})" = 42
