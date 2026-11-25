@@ -9,14 +9,7 @@
   outputs =
     inputs:
     let
-      inherit ((import ./flake-builders/main.nix inputs)) lib;
-      flake = lib.mkFlake { inherit inputs; };
+      inherit (import ./flake-builders/main.nix inputs) lib;
     in
-    flake
-    // {
-      inherit lib;
-      packages = builtins.mapAttrs (
-        _: packages: packages // { default = packages.flake_layout; }
-      ) flake.packages;
-    };
+    lib.mkFlake { inherit inputs; } // { inherit lib; };
 }

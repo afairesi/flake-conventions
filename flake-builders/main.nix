@@ -754,7 +754,7 @@ let
       (
         {
           buildInputs = [ packageDrv ];
-          nativeBuildInputs = testEnvironment.dependencies ++ [ testEnvironment.lean4 ];
+          nativeBuildInputs = testEnvironment.dependencies ++ [ packageDrv.lean4 ];
         }
         // pkgs.lib.optionalAttrs (packageDrv.meta ? mainProgram) {
           PACKAGE_E2E_EXECUTABLE = pkgs.lib.getExe packageDrv;
@@ -1061,7 +1061,6 @@ let
         };
       lean4 = {
         inherit dependencies;
-        inherit (packageDrv) lean4;
         shell = pkgs.mkShell {
           buildInputs = [ packageDrv ];
           inputsFrom = [ packageDrv ];

@@ -83,8 +83,8 @@ def _expect(condition: bool, detail: object) -> None:  # noqa: FBT001
         raise AssertionError(detail)
 
 
-@pytest.fixture(name="root")
-def repository_root_fixture(tmp_path: Path) -> Path:
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
     """Stage a minimal flake in an isolated Git repository."""
     _git(tmp_path, "init", "--quiet")
     (tmp_path / "flake.nix").write_text("{}\n")

@@ -57,7 +57,7 @@ def _first_error(node: Node) -> Node:
     if node.is_error or node.is_missing:
         return node
     for child in node.children:
-        if child.has_error or child.is_error or child.is_missing:
+        if child.has_error:
             return _first_error(child)
     return node
 

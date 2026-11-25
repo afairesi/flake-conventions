@@ -27,7 +27,6 @@ import flake_layout
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
-CACHE_VERSION = 8
 XTERM_ORANGE = 208
 RGB_COLORS = 1 << 24
 RGB_ORANGE = 0xFF8700
@@ -157,9 +156,9 @@ def _write_cache_entry(path: Path, value: object) -> None:
 def cached_output(
     root: Path, view: View, cache: Path, *, refresh: bool
 ) -> tuple[Payload, bool]:
-    """Cache stable inspections and tolerate unavailable cache storage."""
+    """Reuse stable inspections for the same installed explorer, checkout and view."""
     key = hashlib.sha256(
-        json.dumps([CACHE_VERSION, str(root), view, suite_inventory.__file__]).encode()
+        json.dumps([str(Path(__file__).resolve()), str(root), view]).encode()
     ).hexdigest()
     path = cache / f"{key}.json"
     before = fingerprint(root, view)

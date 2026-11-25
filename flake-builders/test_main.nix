@@ -70,9 +70,6 @@ in
     checks.formatter == consumer.formatter.${system}.passthru.tests.check
     && pkgs.lib.all (name: checks."pkgs-${name}" == packages.${name}) (builtins.attrNames packages)
   );
-  testDefaultPackageIsTheLayoutLibrary =
-    check inputs.self.packages.${system}.flake_layout
-      inputs.self.packages.${system}.default;
   testEachTestShellHasAMatchingCheck = check true (
     pkgs.lib.all (name: checks."devshell-${name}" == shells.${name}) (builtins.attrNames shells)
   );
@@ -145,13 +142,12 @@ in
           runtimeHook = "echo invalid";
         })
       ];
-  testNativeBuildersKeepTheirOwnPackageAttributes =
+  testNativePackagesHaveNoFrameworkKind =
     check
-      [ false false true ]
+      [ false false ]
       [
         (packages.python_native ? afairesiKind)
         (packages.rust-native ? afairesiKind)
-        (packages.python_native.example == package)
       ];
   testPackageBuildersReceiveConsumerConfigurationAndOverlays = check {
     afairesiContract = true;

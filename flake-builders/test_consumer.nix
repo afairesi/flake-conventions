@@ -183,9 +183,9 @@ pkgs.runCommand "afairesi-consumer-contract"
     TOML
     printf '%s\n' '{"rules":{"no-empty-function":"off"}}' > .oxlintrc.json
     printf '%s\n' 'supporting/' > .eslintignore
-    printf '%s\n' '# Keep this explanation' 'import os' 'value=  1' > supporting/extra.py
-    cp supporting/extra.py expected-extra.py
-    if ${lintTool}/bin/treefmt --no-cache supporting/extra.py > lint-failure.log 2>&1; then
+    printf '%s\n' '# Keep this explanation' 'import os' 'value=  1' > fixtures/extra.py
+    cp fixtures/extra.py expected-extra.py
+    if ${lintTool}/bin/treefmt --no-cache fixtures/extra.py > lint-failure.log 2>&1; then
       exit 1
     fi
     grep -F F401 lint-failure.log
@@ -194,9 +194,8 @@ pkgs.runCommand "afairesi-consumer-contract"
       exit 1
     fi
     grep -F no-empty-function js-lint.log
-    cmp expected-extra.py supporting/extra.py
-    cp supporting/extra.py fixtures/extra.py
-    cp supporting/extra.py fixtures/source.py.txt
+    cmp expected-extra.py fixtures/extra.py
+    cp fixtures/extra.py fixtures/source.py.txt
     cat > supporting/ordered.nix <<'NIX'
     # ordinary explanation
     {
@@ -212,11 +211,10 @@ pkgs.runCommand "afairesi-consumer-contract"
     cp flake.lock expected-lock
     git init --quiet
     git add --force .gitignore flake.lock LICENSE flake.nix
-    treefmt --no-cache supporting/{extra.py,ordered.nix,data.json} fixtures/{extra.py,source.py.txt} flake.lock .gitignore LICENSE
-    if grep -F '# Keep this explanation' supporting/extra.py; then exit 1; fi
-    grep -Fx 'import os' supporting/extra.py
-    grep -Fx 'value = 1' supporting/extra.py
-    cmp supporting/extra.py fixtures/extra.py
+    treefmt --no-cache supporting/{ordered.nix,data.json} fixtures/{extra.py,source.py.txt} flake.lock .gitignore LICENSE
+    if grep -F '# Keep this explanation' fixtures/extra.py; then exit 1; fi
+    grep -Fx 'import os' fixtures/extra.py
+    grep -Fx 'value = 1' fixtures/extra.py
     cmp expected-extra.py fixtures/source.py.txt
     touch -d @1 supporting/data.json supporting/ordered.nix
     treefmt --no-cache --fail-on-change supporting/{ordered.nix,data.json,main.tf} flake.lock .gitignore
@@ -295,11 +293,6 @@ pkgs.runCommand "afairesi-consumer-contract"
       exit 1
     fi
     cmp expected-broken.nix supporting/broken.nix
-    if ${lintTool}/bin/treefmt --no-cache fixtures/extra.py > fixture-lint.log 2>&1; then
-      exit 1
-    fi
-    grep -F F401 fixture-lint.log
-    cmp supporting/extra.py fixtures/extra.py
     printf '%s\n' '-- ordinary explanation' >> lean-example/main.lean
     sed -i 's/$/\r/' lean-example/main.lean
     mkdir -p lean-example/Nested

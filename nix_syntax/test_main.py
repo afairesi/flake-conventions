@@ -22,18 +22,18 @@ def test_parsing_preserves_source_bytes_in_the_document_or_raises_a_nix_syntax_e
 
 
 @pytest.mark.parametrize(
-    "expression", [b"{}", b"[ 1 2 ]", b"let a = 1; in a", b'"${toString 1}"']
+    ("source", "location"),
+    [(b"{\n  x = 1;", "2:9"), (b"[ 1 2 ) ]", "1:7")],
+    ids=["missing-closing-brace", "unexpected-parenthesis"],
 )
-def test_unclosed_nix_expressions_report_the_file_line_and_column_of_the_syntax_error(
-    expression: bytes,
+def test_nix_syntax_errors_report_the_file_line_and_column(
+    source: bytes, location: str
 ) -> None:
-    """Keep valid source bytes and locate a syntax error in its incomplete version."""
-    if nix_syntax.parse(expression).source != expression:
-        raise AssertionError(expression)
+    """Locate both a missing token and an unexpected token in the source."""
     with pytest.raises(
-        nix_syntax.NixSyntaxError, match=r"incomplete\.nix:\d+:\d+: parse error"
+        nix_syntax.NixSyntaxError, match=rf"^input\.nix:{location}: parse error$"
     ):
-        nix_syntax.parse(b"(" + expression, path="incomplete.nix")
+        nix_syntax.parse(source, path="input.nix")
 
 
 @pytest.mark.parametrize(

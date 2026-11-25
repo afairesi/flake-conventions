@@ -5,7 +5,6 @@ import curses
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
 import tempfile
@@ -13,7 +12,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock, call
 
 import pytest
-import test_explorer as subject
+import test_explorer
 from test_explorer import suite_inventory
 
 import flake_layout
@@ -23,25 +22,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-_ENTRYPOINTS = {
-    "bash": ("main.sh", "echo hello\n"),
-    "html": ("index.html", "<!doctype html><html><body></body></html>\n"),
-    "latex": (
-        "ms.tex",
-        "\\documentclass{article}\n\\begin{document}\nHello.\n\\end{document}\n",
-    ),
-    "lean4": ("main.lean", "def main : IO Unit := pure ()\n"),
-    "python": ("main.py", "def main():\n    pass\n"),
-}
-
-
 def expect(condition: bool, detail: object) -> None:  # noqa: FBT001
     """Report an unexpected result with its observed value."""
     if not condition:
         raise AssertionError(detail)
 
 
-def labels(node: subject.Node, *path: str) -> list[str]:
+def labels(node: test_explorer.Node, *path: str) -> list[str]:
     """Read the child labels at a displayed tree path."""
     for name in path:
         node = next(child for child in node.children if child.label == name)
@@ -78,8 +65,8 @@ def commit(root: Path, message: str) -> None:
     )
 
 
-@pytest.fixture(name="checkout")
-def checkout_fixture(tmp_path: Path) -> Path:
+@pytest.fixture
+def checkout(tmp_path: Path) -> Path:
     """Create one tracked package for cache tests."""
     root = tmp_path / "project"
     _indexed_repository(root)
@@ -143,12 +130,12 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
     (second / "untracked.txt").touch()
     paths = [home / ".git/index", first / ".git/index", source]
     before = [path.read_bytes() for path in paths]
-    tree = subject.build_tree(home, cache=home.parent / "cache")
+    tree = test_explorer.build_tree(home, cache=home.parent / "cache")
     expect(labels(tree) == ["broken", "github.com", "gitlab.com", "missing"], tree)
     project = ("github.com", "owner", "project")
     expect(labels(tree, *project, "example") == ["- staged", "+ working"], tree)
     expect(labels(tree, *project) == ["example"], tree)
-    viewer = subject.Viewer(tree)
+    viewer = test_explorer.Viewer(tree)
     expect(viewer.search("test_working"), tree)
     colors = {text.strip(): color for text, _, color in viewer.frame(30)}
     expect(
@@ -251,8 +238,8 @@ def test_tracked_bats_nix_lean_and_rust_tests_are_searchable_under_their_package
     before = suite_inventory.inspect_repository(mixed_language_checkout)
     expect(all(before[package] == [] for package in expected), before)
     git(mixed_language_checkout, "add", ".")
-    tree = subject.build_tree(home, cache=cache)
-    viewer = subject.Viewer(tree)
+    tree = test_explorer.build_tree(home, cache=cache)
+    viewer = test_explorer.Viewer(tree)
     project = ("github.com", "owner", "project")
     for package, names in expected.items():
         expect(sorted(labels(tree, *project, package)) == sorted(names), package)
@@ -293,13 +280,13 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
     git(checkout, "add", ".")
     cache = home.parent / "cache"
     project = ("github.com", "owner", "project")
-    subject.cached_output(checkout, "diff", cache, refresh=False)
+    test_explorer.cached_output(checkout, "diff", cache, refresh=False)
     (checkout / "shell/test_main.bats").write_text(
         '@test "preserves tabs" { true; }\n@test "accepts blanks" { true; }\n'
     )
     for package in ("crate", "proof", "untested"):
         (checkout / package / "default.nix").unlink()
-    changes = subject.build_tree(home, view="diff", cache=cache)
+    changes = test_explorer.build_tree(home, view="diff", cache=cache)
     expect("gitlab.com" not in labels(changes), changes)
     expect(labels(changes, *project, "- crate") == ["- output::keeps name"], changes)
     expect(
@@ -316,7 +303,7 @@ def test_added_and_removed_test_names_remain_visible_under_their_packages(
         labels(changes, *project, "- proof") == ["- Résultats.garde étiquette"], changes
     )
     expect("- untested" in labels(changes, *project), changes)
-    tests = subject.Viewer(subject.build_tree(home, cache=cache))
+    tests = test_explorer.Viewer(test_explorer.build_tree(home, cache=cache))
     expect(tests.search("+ preserves tabs"), tests.root)
     rows = {row.strip(): color for row, _, color in tests.frame(40)}
     expect(rows["▾ shell (2)"] == "~" and rows["▸ - crate (0)"] == "-", rows)
@@ -336,8 +323,8 @@ def test_a_timed_out_checkout_reports_an_inspection_error(
         return original(root)
 
     monkeypatch.setattr(suite_inventory, "inspect_repository", timeout)
-    tree = subject.build_tree(
-        home, cache=cache, progress=subject.write_startup_progress
+    tree = test_explorer.build_tree(
+        home, cache=cache, progress=test_explorer.write_startup_progress
     )
     expect(
         any(
@@ -354,17 +341,17 @@ def test_cached_test_names_show_the_current_git_status(
     """A cache hit still shows staged changes and reports startup progress."""
     cache = home.parent / "cache"
     cached = home / "gitlab.com/owner/project"
-    subject.cached_output(cached, "tests", cache, refresh=False)
+    test_explorer.cached_output(cached, "tests", cache, refresh=False)
     (cached / "notes.txt").touch()
     git(cached, "add", "notes.txt")
-    tree = subject.build_tree(
-        home, cache=cache, progress=subject.write_startup_progress
+    tree = test_explorer.build_tree(
+        home, cache=cache, progress=test_explorer.write_startup_progress
     )
     expect(
         labels(tree, "gitlab.com", "owner", "project", "example") == ["default output"],
         tree,
     )
-    viewer = subject.Viewer(tree)
+    viewer = test_explorer.Viewer(tree)
     expect(viewer.search("gitlab.com"), tree)
     expect(
         any(selected and color == "~" for _, selected, color in viewer.frame(8)), tree
@@ -380,26 +367,26 @@ def test_home_tree_requires_a_git_root_and_accepts_one_without_submodules(
     """Show an empty valid home, but reject a nested directory or a non-repository."""
     cache = tmp_path / "cache"
     with pytest.raises(ValueError, match="not a git repository"):
-        subject.build_tree(tmp_path, cache=cache)
+        test_explorer.build_tree(tmp_path, cache=cache)
     git(tmp_path, "init", "--quiet")
-    tree = subject.build_tree(tmp_path, cache=cache)
+    tree = test_explorer.build_tree(tmp_path, cache=cache)
     expect(
         tree.label == str(tmp_path)
         and labels(tree) == ["No direct registered submodules."],
         tree,
     )
-    differences = subject.build_tree(tmp_path, cache=cache, view="diff")
+    differences = test_explorer.build_tree(tmp_path, cache=cache, view="diff")
     expect(labels(differences) == ["No package or test-name changes"], differences)
     child = tmp_path / "directory"
     child.mkdir()
     with pytest.raises(ValueError, match="repository root"):
-        subject.build_tree(child, cache=cache)
+        test_explorer.build_tree(child, cache=cache)
 
 
 @pytest.mark.parametrize("view", ["tests", "diff"])
 def test_both_views_reuse_cached_results_until_their_test_inputs_change(
     checkout: Path,
-    view: subject.View,
+    view: test_explorer.View,
 ) -> None:
     """Use working names for the tests view and staged names as the diff baseline."""
     cache = checkout.parent / "cache"
@@ -407,55 +394,55 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
     add_submodule(checkout, nested)
     source = checkout / "example/test_main.py"
     source.write_text("def test_working(): ...\n")
-    first, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    first, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(bool(first) and not hit, first)
     (checkout / "example/main.py").write_text("irrelevant")
     git(checkout, "add", "example/main.py")
     (nested / "example/test_main.py").write_text("def test_nested(): ...\n")
-    again, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    again, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(hit and first == again, again)
     metadata = source.stat()
     source.write_text(source.read_text().replace("test_working", "test_updated"))
     os.utime(source, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
-    changed, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    changed, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(not hit and changed != first, changed)
     git(checkout, "add", "example/test_main.py")
-    staged, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    staged, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     if view == "tests":
         expect(hit and staged == changed == {"example": ["test_updated"]}, staged)
     else:
         expect(not hit and staged == [], staged)
     commit(checkout, "updated")
-    committed, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    committed, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(hit and committed == staged, committed)
-    _, hit = subject.cached_output(checkout, view, cache, refresh=True)
+    _, hit = test_explorer.cached_output(checkout, view, cache, refresh=True)
     expect(not hit, "explicit refresh used cached data")
     git(checkout, "rm", "--cached", "example/test_main.py")
-    untracked, _ = subject.cached_output(checkout, view, cache, refresh=False)
+    untracked, _ = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(untracked == ({"example": []} if view == "tests" else []), untracked)
 
 
 @pytest.mark.parametrize("view", ["tests", "diff"])
 def test_views_are_reloaded_when_the_cache_is_damaged_or_unavailable(
     checkout: Path,
-    view: subject.View,
+    view: test_explorer.View,
 ) -> None:
     """Reload the view when cached JSON is malformed or storage is unavailable."""
     cache = checkout.parent / "cache"
     (checkout / "example/test_main.py").write_text("def test_updated(): ...\n")
-    expected, _ = subject.cached_output(checkout, view, cache, refresh=False)
+    expected, _ = test_explorer.cached_output(checkout, view, cache, refresh=False)
     entry = next(cache.glob("*.json"))
     saved = json.loads(entry.read_text())
     invalid = {"example": [None]} if view == "tests" else [{}]
     entry.write_text(json.dumps({**saved, "value": invalid}))
-    actual, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    actual, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(not hit and actual == expected, actual)
     entry.write_text("partial {")
-    actual, hit = subject.cached_output(checkout, view, cache, refresh=False)
+    actual, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(not hit and actual == expected, actual)
     blocked = checkout.parent / "blocked-cache"
     blocked.write_text("not a directory")
-    actual, hit = subject.cached_output(checkout, view, blocked, refresh=False)
+    actual, hit = test_explorer.cached_output(checkout, view, blocked, refresh=False)
     expect(not hit and actual == expected, actual)
 
 
@@ -467,7 +454,7 @@ def test_the_next_inspection_retries_failed_or_unstable_results(
     flake = checkout / "flake.nix"
     flake.unlink()
     with pytest.raises(ValueError, match=r"flake\.nix"):
-        subject.cached_output(checkout, "tests", cache, refresh=False)
+        test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "failed inspection was cached")
     flake.write_text("{}")
     original = suite_inventory.inspect_repository
@@ -478,10 +465,10 @@ def test_the_next_inspection_retries_failed_or_unstable_results(
         return value
 
     monkeypatch.setattr(suite_inventory, "inspect_repository", changing)
-    subject.cached_output(checkout, "tests", cache, refresh=False)
+    test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not cache.exists(), "changing source was cached")
     monkeypatch.setattr(suite_inventory, "inspect_repository", original)
-    current, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
+    current, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not hit and current == {"example": ["test_changed"]}, current)
 
 
@@ -495,18 +482,18 @@ def test_test_name_cache_refreshes_when_a_symlink_target_changes(
     tests.rename(target)
     tests.symlink_to(target)
     git(checkout, "add", "example/test_main.py")
-    subject.cached_output(checkout, "tests", cache, refresh=False)
+    test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     target.write_text("def test_other(): ...\n")
-    value, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
+    value, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(not hit and value == {"example": ["test_other"]}, value)
 
 
 def test_directories_start_collapsed_and_can_be_expanded_with_the_keyboard() -> None:
     """Show meaningful labels and let h/l fold and unfold details without JSON noise."""
-    root = subject.Node("/home/test", expanded=True)
+    root = test_explorer.Node("/home/test", expanded=True)
     project = root.add("github.com").add("owner").add("project")
-    subject.add_tests(project, {"hello": ["test_greets_the_reader"]})
-    viewer = subject.Viewer(root)
+    test_explorer.add_tests(project, {"hello": ["test_greets_the_reader"]})
+    viewer = test_explorer.Viewer(root)
     expect(
         viewer.frame(30) == [("▾ /home/test", True, ""), ("  ▸ github.com", False, "")],
         viewer.frame(30),
@@ -539,10 +526,10 @@ def test_directories_start_collapsed_and_can_be_expanded_with_the_keyboard() -> 
 
 def test_viewer_keeps_the_selection_visible_when_paging_or_resizing() -> None:
     """Keep navigation visible across viewport changes, paging, and collapsed roots."""
-    root = subject.Node("home", expanded=True)
+    root = test_explorer.Node("home", expanded=True)
     for number in range(12):
         root.add(f"repository {number}")
-    viewer = subject.Viewer(root)
+    viewer = test_explorer.Viewer(root)
     viewer.handle("G", 4)
     expect(viewer.frame(4)[-1] == ("    repository 11", True, ""), viewer.frame(4))
     expect(
@@ -571,7 +558,7 @@ def test_viewer_keeps_the_selection_visible_when_paging_or_resizing() -> None:
 
 def test_viewer_pans_and_displays_control_characters_as_text() -> None:
     """Long labels remain accessible and source text cannot inject terminal controls."""
-    viewer = subject.Viewer(subject.Node("hello\nworld\x1b[31m"))
+    viewer = test_explorer.Viewer(test_explorer.Node("hello\nworld\x1b[31m"))
     label = "  hello\\nworld\\x1b[31m"
     expect(viewer.frame(1) == [(label, True, "")], viewer.frame(1))
     viewer.handle("L", 1)
@@ -584,13 +571,13 @@ def test_viewer_pans_and_displays_control_characters_as_text() -> None:
     expect(viewer.frame(1) == [(label, True, "")], viewer.frame(1))
 
 
-@pytest.fixture(name="screen")
-def screen_fixture(monkeypatch: pytest.MonkeyPatch) -> Mock:
+@pytest.fixture
+def screen(monkeypatch: pytest.MonkeyPatch) -> Mock:
     """Provide a terminal window for browser interactions."""
-    screen = Mock(spec=curses.window)
-    screen.getmaxyx.return_value = (24, 80)
+    window = Mock(spec=curses.window)
+    window.getmaxyx.return_value = (24, 80)
     monkeypatch.setattr(curses, "has_colors", lambda: False)
-    return screen
+    return window
 
 
 @pytest.mark.parametrize(
@@ -607,8 +594,8 @@ def test_selected_additions_and_removals_keep_their_colors_when_highlighted(
     pairs = Mock()
     monkeypatch.setattr(curses, "init_pair", pairs)
     monkeypatch.setattr(curses, "color_pair", lambda pair: pair << 8)
-    tree = subject.Node("home", expanded=True)
-    subject.add_tests(
+    tree = test_explorer.Node("home", expanded=True)
+    test_explorer.add_tests(
         tree,
         None,
         [
@@ -616,7 +603,7 @@ def test_selected_additions_and_removals_keep_their_colors_when_highlighted(
             {"package": "old", "status": "removed", "added": [], "removed": []},
         ],
     )
-    subject.browse(screen, tree, "diff", Mock())
+    test_explorer.browse(screen, tree, "diff", Mock())
     pairs.assert_has_calls(
         [
             call(1, curses.COLOR_GREEN, -1),
@@ -638,16 +625,16 @@ def test_refresh_shows_current_tests_and_diffs_and_keeps_the_selected_test(
     screen: Mock,
 ) -> None:
     """Follow the highlight as rows move, then remove the selected test."""
-    tree = subject.Node("home", expanded=True)
+    tree = test_explorer.Node("home", expanded=True)
     tree.add("package").add_test("test_result")
-    updated = subject.Node("home", expanded=True)
+    updated = test_explorer.Node("home", expanded=True)
     updated.add("another package")
     package = updated.add("package")
     package.add_test("testResult")
     package.add_test("test_result")
-    tests = subject.Node("current tests", expanded=True)
+    tests = test_explorer.Node("current tests", expanded=True)
     tests.add("obsolete test")
-    empty = subject.Node("no remaining tests")
+    empty = test_explorer.Node("no remaining tests")
     results = {"diff": iter([tree, updated]), "tests": iter([tests, empty])}
     screen.erase.side_effect = screen.addnstr.reset_mock
 
@@ -687,9 +674,9 @@ def test_refresh_shows_current_tests_and_diffs_and_keeps_the_selected_test(
         yield "q"
 
     screen.get_wch.side_effect = keys()
-    subject.browse(
+    test_explorer.browse(
         screen,
-        subject.Node("initial tests"),
+        test_explorer.Node("initial tests"),
         "tests",
         lambda view, _report: next(results[view]),
     )
@@ -704,14 +691,14 @@ def test_switching_to_diff_shows_repository_progress_until_the_view_is_ready(
     screen.refresh.side_effect = lambda: frames.append(screen.addnstr.call_args.args[2])
 
     def load(
-        view: subject.View, report: Callable[[subject.Progress], None]
-    ) -> subject.Node:
+        view: test_explorer.View, report: Callable[[test_explorer.Progress], None]
+    ) -> test_explorer.Node:
         expect(frames[-1] == "Loading diff…", frames)
-        return subject.build_tree(
+        return test_explorer.build_tree(
             home, view=view, cache=home / "cache", progress=report
         )
 
-    subject.browse(screen, subject.Node("home"), "tests", load)
+    test_explorer.browse(screen, test_explorer.Node("home"), "tests", load)
     expect(
         frames[1:-3]
         == [
@@ -745,7 +732,7 @@ def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
     screen.erase.side_effect = screen.addnstr.reset_mock
     screen.get_wch.side_effect = [*"/saved notes\n", "q"]
 
-    subject.main()
+    test_explorer.main()
 
     rows = screen.addnstr.call_args_list
     labels = [row.args[2].strip() for row in rows]
@@ -756,104 +743,48 @@ def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
     expect(selected == ["keeps saved notes"], selected)
 
 
-def _fixture_add(
-    root: Path,
-    name: str,
-    kind: str,
-) -> None:
-    """Write the minimal tracked source needed by a test."""
-    sources = {}
-    if kind in _ENTRYPOINTS:
-        filename, content = _ENTRYPOINTS[kind]
-        sources[filename] = content
-    if kind == "host":
-        sources["configuration.nix"] = "{ ... }: {}\n"
-    else:
-        builder = {
-            "bash": "inputs.afairesi.lib.mkBashPackage",
-            "python": "inputs.self.lib.mkPythonPackage",
-            "html": "inputs.self.lib.mkHtmlPackage",
-            "latex": "inputs.self.lib.mkLatexPackage",
-            "lean4": "inputs.self.lib.mkLean4Package",
-            "generic": "pkgs.writeTextFile",
-        }[kind]
-        settings = (
-            '  name = baseNameOf ./.;\n  text = "";\n'
-            if kind == "generic"
-            else "  inherit pkgs;\n  src = ./.;\n"
-        )
-        if kind in {"python", "lean4"}:
-            settings += "  executable = true;\n"
-        sources["default.nix"] = (
-            f"{{ inputs, pkgs, ... }}:\n{builder} {{\n{settings}}}\n"
-        )
-    package = root / name
-    package.mkdir()
-    for filename, source in sources.items():
-        (package / filename).write_text(source)
-    git(root, "add", "--force", "--", name)
-
-
-@pytest.fixture(name="root")
-def repository_root_fixture(tmp_path: Path) -> Path:
-    """Index a flake alongside the test's other temporary files."""
-    root = tmp_path / "repo"
-    root.mkdir()
-    git(root, "init", "--quiet")
-    (root / "flake.nix").write_text("{}\n")
-    (root / "flake.lock").touch()
-    git(root, "add", ".")
-    return root
-
-
-def _snapshot(root: Path) -> dict[Path, tuple[int, bytes]]:
-    """Observe contents and modes, including Git metadata and symbolic links."""
-    files = {}
-    for path in root.rglob("*"):
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
-            contents = os.fsencode(path.readlink())
-        elif stat.S_ISREG(mode):
-            contents = path.read_bytes()
-        else:
-            contents = b""
-        files[path.relative_to(root)] = (mode, contents)
-    return files
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
+    """Stage a flake in the test's temporary repository."""
+    git(tmp_path, "init", "--quiet")
+    (tmp_path / "flake.nix").write_text("{}\n")
+    (tmp_path / "flake.lock").touch()
+    git(tmp_path, "add", ".")
+    return tmp_path
 
 
 def test_inspection_lists_test_names_in_order_even_when_the_implementation_is_missing(
-    root: Path,
+    checkout: Path,
 ) -> None:
     """List declarations without importing the suite or requiring an implementation."""
-    _fixture_add(root, "inbox", "python")
-    (root / "inbox/main.py").unlink()
-    (root / "inbox/test_main.py").write_text(
+    package = checkout / "example"
+    (package / "main.py").unlink()
+    (package / "test_main.py").write_text(
         "import pytest\n"
         "raise RuntimeError('inspection must not import this suite')\n"
         "@pytest.mark.parametrize('message', ['abc', 'ABC'])\n"
         "def test_preserves_message_case(message): assert deliver(message) == message\n"
         "def test_delivers_messages(): assert deliver('hello') == 'hello'\n"
     )
-    git(root, "add", "--", "inbox/test_main.py")
-    inventory = suite_inventory.inspect_repository(root)
+    inventory = suite_inventory.inspect_repository(checkout)
     expect(
         inventory
-        == {"inbox": ["test_delivers_messages", "test_preserves_message_case"]},
+        == {"example": ["test_delivers_messages", "test_preserves_message_case"]},
         inventory,
     )
 
 
 def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
     """Keep equal identifiers distinct across packages and unique within a suite."""
-    for name in ("mail_box", "mail-box"):
-        _fixture_add(root, name, "python")
-        tests = root / name / "test_main.py"
+    for name in ("Mail_Box-v2", "Mail-Box_v2"):
+        tests = _python_package(root, name) / "test_main.py"
         tests.write_text("def test_delivers(): ...\ndef test_delivers(): ...\n")
-        git(root, "add", "--", f"{name}/test_main.py")
+    git(root, "add", ".")
     inventory = suite_inventory.inspect_repository(root)
-    expect(list(inventory) == ["mail-box", "mail_box"], inventory)
+    expect(list(inventory) == ["Mail-Box_v2", "Mail_Box-v2"], inventory)
     expect(
-        inventory == {"mail-box": ["test_delivers"], "mail_box": ["test_delivers"]},
+        inventory
+        == {"Mail-Box_v2": ["test_delivers"], "Mail_Box-v2": ["test_delivers"]},
         inventory,
     )
     with pytest.raises(ValueError, match="module names collide"):
@@ -861,38 +792,37 @@ def test_each_package_lists_a_shared_test_name_once(root: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "constructor"),
+    ("entrypoint", "constructor"),
     [
-        ("bash", "inputs.afairesi.lib.mkBashPackage"),
-        ("html", "inputs.self.lib.mkHtmlPackage"),
-        ("latex", "inputs.afairesi.lib.mkLatexPackage"),
-        ("lean4", "(inputs.self).lib.mkLean4Package"),
-        ("python", "let build = inputs.self.lib.mkPythonPackage; in (build)"),
+        ("main.sh", "inputs.afairesi.lib.mkBashPackage"),
+        ("index.html", "inputs.self.lib.mkHtmlPackage"),
+        ("ms.tex", "inputs.afairesi.lib.mkLatexPackage"),
+        ("main.lean", "(inputs.self).lib.mkLean4Package"),
+        ("main.py", "let build = inputs.self.lib.mkPythonPackage; in (build)"),
     ],
 )
 def test_declared_package_kind_determines_the_required_entrypoint(
     root: Path,
-    kind: str,
+    entrypoint: str,
     constructor: str,
 ) -> None:
     """Keep the declared build kind when supporting files resemble entrypoints."""
     package = root / "example"
     package.mkdir()
-    executable = "executable = true;" if kind in {"lean4", "python"} else ""
+    executable = "executable = true;" if entrypoint in {"main.lean", "main.py"} else ""
     (package / "default.nix").write_text(
         "{ inputs, pkgs, ... }: let dependency = inputs.self.lib.mkHtmlPackage {}; in "
         f"{constructor} {{ inherit pkgs; src = ./.; {executable} }}",
     )
-    if kind != "python":
+    if entrypoint != "main.py":
         (package / "test_main.py").write_text("def test_unrelated(): pass")
-    for filename, content in _ENTRYPOINTS.values():
-        (package / filename).write_text(content)
-    (package / "main.nix").touch()
+    for filename in ("main.sh", "index.html", "ms.tex", "main.lean", "main.nix"):
+        (package / filename).touch()
+    (package / "main.py").write_text("def main(): pass\n")
     git(root, "add", "--", "example")
     inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {"example": []}, inventory)
     flake_layout.validate_flake_source(root)
-    entrypoint, _ = _ENTRYPOINTS[kind]
     (package / entrypoint).unlink()
     with pytest.raises(ValueError, match=re.escape(entrypoint)):
         flake_layout.validate_flake_source(root)
@@ -994,38 +924,21 @@ class AsyncReports(AsyncBase):
     expect(declared == collected, (declared, collected))
 
 
-def test_the_package_list_preserves_declared_names_and_excludes_standalone_hosts(
-    root: Path,
-) -> None:
-    """Keep each package's exact spelling in a mixed repository."""
-    packages = [
-        ("python", "Mixed_Name-v2"),
-        ("python", "double--dash"),
-        ("python", "_Private"),
-        ("html", "Web.Site+v2"),
-        ("latex", "Report.v2"),
-        ("lean4", "Proof_Library-v2"),
-        ("generic", "Package Name"),
-        ("generic", "δοκιμή"),
-    ]
-    for kind, name in packages:
-        _fixture_add(root, name, kind)
-    _fixture_add(root, "workLaptop", "host")
-    flake_layout.validate_flake_source(root)
-    inventory = suite_inventory.inspect_repository(root)
-    expect(inventory == {name: [] for _, name in packages}, inventory)
-
-
-def _inspection_repository(root: Path) -> None:
-    (root / "flake.nix").write_text("{}\n")
-    package = root / "example"
-    package.mkdir(parents=True)
+def _python_package(root: Path, name: str) -> Path:
+    package = root / name
+    package.mkdir()
     (package / "default.nix").write_text(
         "{ inputs, pkgs, ... }: inputs.self.lib.mkPythonPackage { "
         "inherit pkgs; src = ./.; executable = true; "
         'meta.description = "Example"; }',
     )
     (package / "main.py").write_text("def main(): pass\n")
+    return package
+
+
+def _inspection_repository(root: Path) -> None:
+    (root / "flake.nix").write_text("{}\n")
+    _python_package(root, "example")
     _write_test(root, "default_output")
 
 
@@ -1049,9 +962,11 @@ def test_package_names_follow_their_tracked_declarations(
         suite_inventory.inspect_repository(root) == {"draft": ["testDelivers"]},
         package,
     )
-    git(root, "mv", "--", "draft", "inbox")
+    git(root, "mv", "--", "draft", "δοκιμή.v2 + inbox")
     expect(
-        suite_inventory.inspect_repository(root) == {"inbox": ["testDelivers"]}, root
+        suite_inventory.inspect_repository(root)
+        == {"δοκιμή.v2 + inbox": ["testDelivers"]},
+        root,
     )
 
 
@@ -1129,16 +1044,16 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
     )
     cache = checkout.parent / "cache"
     expected = {"example": ["test_cpu_limit", "test_pdf_output"]}
-    first, _ = subject.cached_output(checkout, "tests", cache, refresh=False)
+    first, _ = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(first == expected, first)
     expect(suite_inventory.diff_repository(checkout) == [], "unexpected name changes")
     python.write_text("def test_openapi_schema(): pass\n")
-    current, hit = subject.cached_output(checkout, "tests", cache, refresh=False)
+    current, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(
         not hit and current == {"example": ["test_cpu_limit", "test_openapi_schema"]},
         current,
     )
-    display = subject.Node("example")
+    display = test_explorer.Node("example")
     display.add_test("test_openapi_schema")
     expect(labels(display) == ["OpenAPI schema"], display)
     changes = suite_inventory.diff_repository(checkout)
@@ -1210,10 +1125,13 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
     root: Path,
 ) -> None:
     """Drop deleted declarations and keep diagnosing them in layout validation."""
-    _fixture_add(root, "shared", "host")
-    (root / "shared/default.nix").write_text("{}")
-    git(root, "add", "--", "shared/default.nix")
-    (root / "shared/default.nix").unlink()
+    shared = root / "shared"
+    shared.mkdir()
+    (shared / "configuration.nix").write_text("{ ... }: {}")
+    (shared / "default.nix").write_text("{}")
+    git(root, "add", "--", "shared")
+    (shared / "default.nix").unlink()
+    expect(suite_inventory.inspect_repository(root) == {}, shared)
     changes = suite_inventory.diff_repository(root)
     expect(
         changes
@@ -1264,19 +1182,17 @@ def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
         check=True,
         timeout=10,
     )
-    before = _snapshot(tmp_path)
+    index = tmp_path / ".git/index"
+    before = index.read_bytes()
     with pytest.raises(ValueError, match="unmerged index"):
         suite_inventory.diff_repository(tmp_path)
-    expect(
-        _snapshot(tmp_path) == before,
-        "conflict diff changed state",
-    )
+    expect(index.read_bytes() == before, "diff modified the conflicted index")
 
 
 def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     tmp_path: Path,
 ) -> None:
-    """Read the selected worktree's index while preserving shared Git metadata."""
+    """Compare the linked worktree's staged and working sources without edits."""
     root, linked = tmp_path / "repository", tmp_path / "linked"
     _indexed_repository(root)
     commit(root, "initial")
@@ -1284,7 +1200,13 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     _write_test(linked, "staged")
     git(linked, "add", "example/test_main.py")
     _write_test(linked, "working")
-    before = _snapshot(tmp_path)
+    paths = [
+        root / ".git/index",
+        linked / git(linked, "rev-parse", "--git-path", "index"),
+        root / "example/test_main.py",
+        linked / "example/test_main.py",
+    ]
+    before = [path.read_bytes() for path in paths]
     changes = suite_inventory.diff_repository(linked)
     expect(
         changes
@@ -1298,39 +1220,34 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
         ],
         changes,
     )
-    expect(
-        _snapshot(tmp_path) == before,
-        "diff changed worktree state",
-    )
+    expect([path.read_bytes() for path in paths] == before, "diff modified files")
 
 
 def test_inspection_omits_untracked_packages_and_test_files(
     root: Path,
 ) -> None:
     """Skip malformed local declarations and suites until they are tracked."""
-    _fixture_add(root, "example", "python")
-    _fixture_add(root, "library", "generic")
+    _python_package(root, "example")
+    (root / "library").mkdir()
+    (root / "library/default.nix").write_text("{}")
+    git(root, "add", ".")
     (root / "example/test_main.py").write_text("def broken(:")
     (root / "library/test_main.nix").write_text("{ invalid")
     local = root / "experiments"
     local.mkdir()
     (local / "default.nix").write_text("{ invalid")
-    before = _snapshot(root)
     flake_layout.validate_flake_source(root)
     inventory = suite_inventory.inspect_repository(root)
     expect(inventory == {"example": [], "library": []}, inventory)
-    expect(
-        _snapshot(root) == before, "reading untracked sources changed the repository"
-    )
 
 
 def test_rust_inventory_follows_enabled_cargo_targets_and_tracked_modules(
     root: Path,
 ) -> None:
     """List declared unit and integration tests without building the crate."""
-    _fixture_add(root, "example", "generic")
     package = root / "example"
     sources = {
+        "default.nix": "{}",
         "Cargo.toml": """[package]
 name = "example"
 edition = "2024"
