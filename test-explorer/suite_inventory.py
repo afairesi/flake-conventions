@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
+from test_explorer.node_tests import is_node_suite, node_suites, node_test_names
 from test_explorer.rust import rust_test_names
 from test_explorer.suite_readers import (
     bats_test_names,
@@ -125,6 +126,8 @@ def _suite_reader(path: Path) -> Callable[[Path], set[str]] | None:
         return cpp_test_names
     if path.suffix == ".bats":
         return bats_test_names
+    if is_node_suite(path):
+        return node_test_names
     return None
 
 
@@ -190,6 +193,14 @@ def inspect_packages(root: Path) -> dict[str, PackageInfo]:
                 else {root / path for path in tracked if path.suffix == ".rs"}
             )
             names.update(rust_test_names(package.root, tracked_rust))
+        if (
+            package.kind == "generic"
+            and Path(name) / "package.json" in paths
+            and (package.root / "package.json").is_file()
+        ):
+            for suite in node_suites(package.root, tracked):
+                if suite.is_file():
+                    names.update(node_test_names(suite))
         inventory[name] = PackageInfo(
             description=_package_description(package.declaration), tests=sorted(names)
         )
@@ -222,6 +233,7 @@ def diff_inputs(root: Path) -> list[tuple[str, str, Path]]:
     filenames = {
         "default.nix",
         "Cargo.toml",
+        "package.json",
         *flake_layout.PACKAGE_TEST_FILES.values(),
     }
     inputs = [

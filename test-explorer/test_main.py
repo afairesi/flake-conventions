@@ -1422,3 +1422,55 @@ test = false
         ],
         changes,
     )
+
+
+def test_node_packages_list_and_diff_tracked_builtin_runner_cases(root: Path) -> None:
+    """Discover ESM and CommonJS bindings, modifiers and nested test files."""
+    package = root / "registry"
+    nested = package / "test"
+    nested.mkdir(parents=True)
+    (package / "default.nix").write_text("{ pkgs, ... }: pkgs.buildNpmPackage {}")
+    (package / "package.json").write_text("{}")
+    suite = package / "test.mjs"
+    suite.write_text(
+        """import run, {test as check, it, before} from 'node:test';
+import * as suite from 'node:test';
+import {test} from 'other';
+run("default", () => {});
+check.only('aliased', () => {});
+it.skip(`skipped`, () => {});
+suite.test.todo('pending');
+suite.it('nested', () => {});
+before('hook'); test('unrelated'); check(variable); it(`dynamic ${value}`);
+"""
+    )
+    (nested / "api.cjs").write_text(
+        """const {test, it: example} = require("node:test");
+const runner = require("node:test");
+const {it: unrelated} = other("node:test");
+test("commonjs"); example("destructured"); runner.it("method"); unrelated("ignored");
+"""
+    )
+    git(root, "add", ".")
+    (package / "untracked.test.js").write_text("import t from 'node:test'; t('local')")
+    expected = sorted(
+        [
+            "default",
+            "aliased",
+            "skipped",
+            "pending",
+            "nested",
+            "commonjs",
+            "destructured",
+            "method",
+        ]
+    )
+    inventory = suite_inventory.inspect_packages(root)
+    expect(inventory["registry"]["tests"] == expected, inventory)
+    suite.write_text(suite.read_text().replace("aliased", "renamed"))
+    changes = suite_inventory.diff_repository(root)
+    expect(len(changes) == 1, changes)
+    expect(
+        changes[0]["added"] == ["renamed"] and changes[0]["removed"] == ["aliased"],
+        changes,
+    )
