@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Parse Nix expressions and read or quote their literals."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
-
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 

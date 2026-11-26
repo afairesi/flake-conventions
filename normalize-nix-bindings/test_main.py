@@ -16,6 +16,16 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _run_formatter(*paths: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - The test environment supplies the executable and paths.
+        [os.environ["PACKAGE_E2E_EXECUTABLE"], *paths],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+
 def test_nested_bindings_flatten_to_a_dotted_path_within_a_linear_visit_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40,13 +50,7 @@ def test_formatting_reports_an_invalid_file_and_still_formats_the_next_file(
     invalid.write_text(source)
     valid = tmp_path / "valid.nix"
     valid.write_text("{ z = 1; a = 2; }")
-    result = subprocess.run(  # noqa: S603 - Test harness selects the executable and fixture arguments.
-        [os.environ["PACKAGE_E2E_EXECUTABLE"], str(invalid), str(valid)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
-    )
+    result = _run_formatter(invalid, valid)
     if result.returncode != 1 or str(invalid) not in result.stderr:
         raise AssertionError(result)
     if invalid.read_text() != source:
@@ -119,12 +123,7 @@ def test_formatting_sorts_nix_bindings_and_reaches_a_stable_form_in_one_pass(
         path.write_text(source, encoding="utf-8")
         expected_files[path] = expected
     for _ in range(2):
-        result = subprocess.run(  # noqa: S603 - Test harness selects the executable and fixture arguments.
-            [os.environ["PACKAGE_E2E_EXECUTABLE"], *expected_files],
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
+        result = _run_formatter(*expected_files)
         if result.returncode or result.stdout or result.stderr:
             raise AssertionError(result)
         for path, expected in expected_files.items():

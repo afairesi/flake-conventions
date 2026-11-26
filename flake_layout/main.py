@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Discover package declarations and check the layout of a flake source tree."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
-
 import ast
 import keyword
 import stat
@@ -49,18 +47,23 @@ class Package:
     declaration: nix_syntax.Document
 
 
-def git(root: Path, *arguments: str) -> str:
-    """Read Git output without optional writes to the index."""
+def git_bytes(root: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
+    """Run Git with optional binary input and preserve its output byte for byte."""
     completed = subprocess.run(  # noqa: S603 - Git arguments are passed without a shell.
         ["git", "--no-optional-locks", "-C", str(root), *arguments],  # noqa: S607
+        input=stdin,
         capture_output=True,
         check=False,
-        text=True,
         timeout=30,
     )
     if completed.returncode:
-        raise ValueError(completed.stderr.strip())
+        raise ValueError(completed.stderr.decode(errors="replace").strip())
     return completed.stdout
+
+
+def git(root: Path, *arguments: str) -> str:
+    """Read Git's text output without optional writes to the index."""
+    return git_bytes(root, *arguments).decode()
 
 
 def read_regular(path: Path) -> bytes | None:
@@ -222,8 +225,16 @@ def _python_class_mro(
     return result
 
 
+def _disabled_tests(body: list[ast.stmt]) -> bool:
+    """Read a literal __test__ override without importing the module."""
+    value = _last_binding(body, "__test__")
+    return isinstance(value, ast.Constant) and value.value is False
+
+
 def _test_names_from_ast(module: ast.Module) -> set[str]:
     """Collect pytest identifiers, including methods inherited from local bases."""
+    if _disabled_tests(module.body):
+        return set()
     classes = {
         node.name: node for node in module.body if isinstance(node, ast.ClassDef)
     }
@@ -234,8 +245,10 @@ def _test_names_from_ast(module: ast.Module) -> set[str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name.startswith("test")
     }
-    for name in classes:
-        if not (name.startswith("Test") or name in case_classes):
+    for name, node in classes.items():
+        if not (name.startswith("Test") or name in case_classes) or _disabled_tests(
+            node.body
+        ):
             continue
         methods: set[str] = set()
         for ancestor in reversed(_python_class_mro(classes, name, set())):
@@ -277,7 +290,9 @@ def _python_source_issues(package: Package, paths: set[Path]) -> list[str]:
                 f"{name}/main.py: move test definitions to test_main.py",
             )
         entrypoint = (
-            None if _python_library(package.declaration) else _python_entrypoint(module)
+            None
+            if _python_library(package.declaration)
+            else _last_binding(module.body, "main")
         )
         prefix = f"{name}/main.py: "
         if isinstance(entrypoint, ast.AsyncFunctionDef):
@@ -300,30 +315,27 @@ def _python_source_issues(package: Package, paths: set[Path]) -> list[str]:
     return issues
 
 
-def _python_entrypoint(
-    module: ast.Module,
-) -> ast.stmt | ast.expr | None:
-    """Find the last direct binding or deletion of the installed main name."""
-    for node in reversed(module.body):
+def _last_binding(body: list[ast.stmt], name: str) -> ast.stmt | ast.expr | None:
+    """Find the value bound to a name by the last direct statement affecting it."""
+    for node in reversed(body):
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            and node.name == "main"
+            and node.name == name
         ):
             return node
         if isinstance(node, ast.Delete) and any(
-            isinstance(target, ast.Name) and target.id == "main"
+            isinstance(target, ast.Name) and target.id == name
             for target in node.targets
         ):
-            return node
+            return None
         if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
-            (alias.asname or alias.name) == "main" for alias in node.names
+            (alias.asname or alias.name) == name for alias in node.names
         ):
             return None
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if any(
-                isinstance(target, ast.Name) and target.id == "main"
-                for target in targets
+                isinstance(target, ast.Name) and target.id == name for target in targets
             ):
                 return node.value
     return None

@@ -1,10 +1,9 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Test the flake layout check."""
+"""Test flake layout validation and static Python test discovery."""
 
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,6 +14,58 @@ import nix_syntax
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+pytest_plugins = ("pytester",)
+
+
+def test_python_names_match_the_functions_and_methods_collected_by_pytest(
+    pytester: pytest.Pytester,
+) -> None:
+    """Compare the static inventory with the node IDs collected by pytest."""
+    path = pytester.makepyfile("""
+import unittest as unit
+from unittest import IsolatedAsyncioTestCase as AsyncCase
+from unittest import TestCase
+from unittest import TestCase as Case
+def testCamelCase(): pass
+def test(): pass
+def helper():
+    def test_nested(): pass
+class TestArguments:
+    def testCamelCase(self): pass
+    async def test_missing_input(self): pass
+class Arguments(Case):
+    def test_valid_input(self): pass
+class Derived(Arguments):
+    def test_other_input(self): pass
+class Helper:
+    def test_not_collected(self): pass
+class Reports(TestCase):
+    def testCamelCase(self): pass
+class Cases:
+    def test_result(self): pass
+class Intermediate(Cases): pass
+class TestInherited(Intermediate): pass
+class TestOverride(Cases):
+    test_result = None
+    def test_visible(self): pass
+class TestDisabled(Cases):
+    __test__ = False
+    __test__: bool
+class TestEnabled(Cases):
+    __test__ = False
+    del __test__
+class Qualified(unit.TestCase):
+    def test_qualified(self): pass
+class AsyncBase(AsyncCase): pass
+class AsyncReports(AsyncBase):
+    async def test_result(self): pass
+""")
+    collected = {item.nodeid.split("::", 1)[1] for item in pytester.getitems(path)}
+    declared = flake_layout.python_test_names(path)
+    if declared != collected:
+        raise AssertionError((declared, collected))
 
 
 def _add_example(root: Path, *, python: bool) -> None:
@@ -29,18 +80,7 @@ def _add_example(root: Path, *, python: bool) -> None:
         (package / "main.py").write_text("def main(): pass\n")
     else:
         (package / "default.nix").write_text("{ pkgs, ... }: pkgs.writeTextFile {}")
-    _git(root, "add", "--", "example")
-
-
-def _git(root: Path, *arguments: str) -> str:
-    return subprocess.run(  # noqa: S603 - Fixed Git executable with test-controlled arguments.
-        ["git", *arguments],  # noqa: S607
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=10,
-    ).stdout
+    flake_layout.git(root, "add", "--", "example")
 
 
 @pytest.mark.parametrize("exported", [False, True], ids=["git", "export"])
@@ -54,7 +94,7 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
     assets.mkdir()
     (assets / "default.nix").write_text("invalid nested declaration")
     (assets / "nested.rs").touch()
-    _git(root, "add", "--", "example")
+    flake_layout.git(root, "add", "--", "example")
     local = root / "experiments"
     local.mkdir()
     (local / "main.py").write_text("invalid untracked source")
@@ -82,10 +122,10 @@ def test_layout_check_skips_nested_assets_without_running_package_code(
 @pytest.fixture
 def root(tmp_path: Path) -> Path:
     """Stage a minimal flake in an isolated Git repository."""
-    _git(tmp_path, "init", "--quiet")
+    flake_layout.git(tmp_path, "init", "--quiet")
     (tmp_path / "flake.nix").write_text("{}\n")
     (tmp_path / "flake.lock").touch()
-    _git(tmp_path, "add", ".")
+    flake_layout.git(tmp_path, "add", ".")
     return tmp_path
 
 
@@ -96,13 +136,13 @@ def test_layout_check_rejects_a_tracked_python_package_initializer(
     _add_example(root, python=True)
     initializer = root / "example/__init__.py"
     initializer.write_text('"""Personal initialization."""\n')
-    _git(root, "add", "example/__init__.py")
-    staged = _git(root, "write-tree").strip()
+    flake_layout.git(root, "add", "example/__init__.py")
+    staged = flake_layout.git(root, "write-tree").strip()
     with pytest.raises(ValueError, match=r"__init__\.py: reserved"):
         flake_layout.validate_flake_source(root)
-    _git(root, "diff", "--cached", "--exit-code", staged)
-    _git(root, "diff", "--exit-code", staged)
-    untracked = _git(root, "ls-files", "--others")
+    flake_layout.git(root, "diff", "--cached", "--exit-code", staged)
+    flake_layout.git(root, "diff", "--exit-code", staged)
+    untracked = flake_layout.git(root, "ls-files", "--others")
     if untracked:
         raise AssertionError(untracked)
 
@@ -117,7 +157,7 @@ def test_layout_check_identifies_the_file_with_invalid_nix_syntax(
     """Report syntax errors in tracked flake, package, source, and test files."""
     _add_example(root, python=False)
     (root / relative).write_text("{ inputs, pkgs, ... }: (\n")
-    _git(root, "add", "--", relative)
+    flake_layout.git(root, "add", "--", relative)
     with pytest.raises(
         nix_syntax.NixSyntaxError, match=rf"{re.escape(relative)}:\d+:\d+: parse error"
     ):

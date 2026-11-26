@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Read Rust test functions from Cargo targets and their declared modules."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
-
 import tomllib
 from os.path import normpath
 from pathlib import Path

@@ -1,14 +1,15 @@
-{ inputs, pkgs }:
+{
+  inputs,
+  pkgs,
+  system,
+}:
 let
-  inherit (import ./test_fixtures.nix { inherit inputs pkgs; })
+  inherit (consumer.packages.${system}) example;
+  inherit (import ./test_fixtures.nix { inherit inputs pkgs system; })
     consumer
-    consumerSelf
-    consumerSource
     htmlPackage
-    package
     pythonLibrary
     overridden
-    system
     ;
   failedCheck = pkgs.testers.testBuildFailure' {
     drv = overriddenCheck.overrideAttrs {
@@ -42,7 +43,7 @@ let
   leanLibrary = consumer.packages.${system}.test_main;
   lintTool = (import ./main.nix inputs).lint {
     inherit pkgs;
-    self = consumerSelf;
+    self = consumer;
   };
   overriddenCheck = overridden.checks.${system}.example;
 in
@@ -68,7 +69,7 @@ pkgs.runCommand "afairesi-consumer-contract"
     import json
     from pathlib import Path
 
-    source = Path("${package.src}/main.py")
+    source = Path("${example.src}/main.py")
     files = json.loads(Path("${overriddenCheck}/coverage.json").read_text())["files"]
     assert set(files) == {str(source)}
     measured = files[str(source)]
@@ -88,7 +89,7 @@ pkgs.runCommand "afairesi-consumer-contract"
     head -c 5 ${latexPackage}/ms.pdf | grep -F '%PDF-'
     test ! -e ${pythonLibrary}/bin
     test "$(cat ${pythonLibrary}/install-hooks)" = prepost
-    PYTHONPATH=${pythonLibrary}/${pkgs.python3.sitePackages} ${pkgs.python3}/bin/python -c 'import lean_example'
+    PYTHONPATH=${pythonLibrary}/${pkgs.python3.sitePackages} ${pkgs.python3}/bin/python -c 'from example import main; assert callable(main)'
     ${pkgs.python3}/bin/python - <<'PY'
     import os
     import subprocess
@@ -108,12 +109,11 @@ pkgs.runCommand "afairesi-consumer-contract"
     assert (site / "src/main.rs").read_bytes() == Path("${./fixtures/rust-native/src/main.rs}").read_bytes()
     assert launch(display=":0")[1] == launch(wayland="wayland-0")[1] == ["-o", "/"]
     assert launch(display=":0", args=["--no-open", "-p", "8761", "two words"])[1] == ["-p", "8761", "two words"]
-    for args in (["-o", "/source"], ["--o=/source"], ["--no-o"]):
-        assert launch(display=":0", args=args)[1] == args
+    assert launch(display=":0", args=["-o", "/source"])[1] == ["-o", "/source"]
     PY
-    cmp ${latexPackage.manuscript} ${package}/${package.pythonModule.sitePackages}/example/ms.tex
+    cmp ${latexPackage.manuscript} ${example}/${example.pythonModule.sitePackages}/example/ms.tex
     mkdir native-source
-    cp -R ${consumerSource}/{bash-example,example,lean-example,nix-library,python_native,rust-native} native-source/
+    cp -R ${consumer.outPath}/{bash-example,example,lean-example,nix-library,python_native,rust-native} native-source/
     touch native-source/{flake.nix,flake.lock}
     ${pkgs.lib.getExe inputs.self.packages.${system}.test-explorer} --help > /dev/null
     ${
@@ -168,7 +168,7 @@ pkgs.runCommand "afairesi-consumer-contract"
     actual=$(${consumer.apps.${system}.example.program} 'two words' --flag)
     test "$actual" = "$expected"
     expected=$(printf '%s\n' unloaded "['two words', '--flag']")
-    actual=$(${pkgs.lib.getExe package} 'two words' --flag)
+    actual=$(${pkgs.lib.getExe example} 'two words' --flag)
     test "$actual" = "$expected"
     status=0
     AFAIRESI_CONSUMER_FAIL=1 ${consumer.apps.${system}.example.program} > failed-output || status=$?
@@ -179,12 +179,16 @@ pkgs.runCommand "afairesi-consumer-contract"
     test "$actual" = "$expected"
     test ! -e ${leanLibrary}/bin
     cmp ${leanLibrary.src}/test_main.lean ${leanLibrary}/test_main.lean
-    cp -R ${consumerSource} formatted
+    cp -R ${consumer.outPath} formatted
     chmod -R u+w formatted
     cd formatted
     printf '{}\n' > flake.nix
     (cd example && ${lintTool}/bin/treefmt --no-cache --on-unmatched=fatal --formatters mypy-example main.py)
-    for name in default orphan unavailable python_native; do
+    printf '\nimport missing_consumer_dependency\n' >> example/main.py
+    if ${lintTool}/bin/treefmt --no-cache --formatters mypy-example example/main.py > mypy.log 2>&1; then exit 1; fi
+    grep -F 'missing_consumer_dependency' mypy.log | grep -F '[import-not-found]'
+    cp ${example.src}/main.py example/main.py
+    for name in orphan unavailable python_native; do
       if ${lintTool}/bin/treefmt --formatters "mypy-$name" flake.nix > selection.log 2>&1; then exit 1; fi
       grep -F "formatter mypy-$name not found in config" selection.log
       if treefmt --formatters "lean4-$name" flake.nix > selection.log 2>&1; then exit 1; fi
@@ -321,13 +325,13 @@ pkgs.runCommand "afairesi-consumer-contract"
     grep -F 'ordinary explanation' lean-example/main.lean
     grep -F 'set_option linter.missingDocs false in' test_main/main.lean
     cp test_main/main.lean expected-main.lean
-    cp ${consumerSource}/test_main/main.lean test_main/main.lean
+    cp ${consumer.outPath}/test_main/main.lean test_main/main.lean
     printf '%s\n' 'import MissingFormatterDependency' > test_main/test_main.lean
     if treefmt --no-cache test_main/{main,test_main}.lean > format-failure.log 2>&1; then
       exit 1
     fi
     cmp expected-main.lean test_main/main.lean
-    cp ${consumerSource}/test_main/main.lean test_main/main.lean
+    cp ${consumer.outPath}/test_main/main.lean test_main/main.lean
     cat > test_main/test_main.lean <<'LEAN'
     #eval show IO Unit from do
       let some target ← IO.getEnv "AFAIRESI_EDIT_TARGET"

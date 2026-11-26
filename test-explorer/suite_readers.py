@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Read test names from Bats, C++, Nix and Lean test suites."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
-
 import json
 import re
 import subprocess

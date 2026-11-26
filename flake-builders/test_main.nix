@@ -1,34 +1,22 @@
-{ inputs, pkgs }:
+{
+  inputs,
+  pkgs,
+  system,
+}:
 let
-  inherit (import ./test_fixtures.nix { inherit inputs pkgs; })
+  inherit (import ./test_fixtures.nix { inherit inputs pkgs system; })
     consumer
-    consumerSource
     htmlPackage
     overridden
-    package
     pythonLibrary
-    system
     ;
   accepts =
-    attributes:
+    builder: attributes:
     (builtins.tryEval (
-      inputs.self.lib.mkPythonPackage (
+      builder (
         {
           inherit pkgs;
           executable = true;
-          src = ./fixtures/example;
-        }
-        // attributes
-      )
-    )).success;
-  acceptsLean =
-    attributes:
-    (builtins.tryEval (
-      inputs.self.lib.mkLean4Package (
-        {
-          inherit pkgs;
-          executable = true;
-          src = ./fixtures/lean-example;
         }
         // attributes
       )
@@ -38,20 +26,17 @@ let
   checks = consumer.checks.${system};
   empty = inputs.self.lib.mkFlake {
     inputs.self = empty // {
-      outPath = consumerSource + "/unavailable";
+      outPath = consumer.outPath + "/unavailable";
     };
     systems = [ system ];
   };
-  leanExample = consumer.packages.${system}.lean-example;
-  leanLibrary = consumer.packages.${system}.test_main;
-  overriddenCheck = overridden.checks.${system}.example;
   packages = consumer.packages.${system};
   shells = consumer.devShells.${system};
 in
 {
   testAppsExposePackageMetadata = check true (
     apps.example.type == "app"
-    && apps.example.meta == package.meta
+    && apps.example.meta == packages.example.meta
     && apps.example.meta.description == "Afairesi consumer contract example"
   );
   testAppsWithoutADescriptionUseRunFollowedByThePackageName =
@@ -61,10 +46,10 @@ in
     check
       [ "python" "bash" "html" "lean4" ]
       [
-        package.afairesiKind
+        packages.example.afairesiKind
         packages.bash-example.afairesiKind
         htmlPackage.afairesiKind
-        leanExample.afairesiKind
+        packages.lean-example.afairesiKind
       ];
   testChecksIncludeTheFormatterAndAllPackages = check true (
     checks.formatter == consumer.formatter.${system}.passthru.tests.check
@@ -127,19 +112,21 @@ in
       [ false false ]
       [
         (pythonLibrary.meta ? mainProgram)
-        (leanLibrary.meta ? mainProgram)
+        (packages.test_main.meta ? mainProgram)
       ];
   testLibraryBuildersRejectRuntimeHooks =
     check
       [ false false ]
       [
-        (accepts {
+        (accepts inputs.self.lib.mkPythonPackage {
           executable = false;
           runtimeHook = "echo invalid";
+          src = ./fixtures/example;
         })
-        (acceptsLean {
+        (accepts inputs.self.lib.mkLean4Package {
           executable = false;
           runtimeHook = "echo invalid";
+          src = ./fixtures/lean-example;
         })
       ];
   testNativePackagesHaveNoFrameworkKind =
@@ -153,7 +140,7 @@ in
     afairesiContract = true;
     allowUnfree = true;
     cudaSupport = true;
-  } package.consumerConfig;
+  } packages.example.consumerConfig;
   testPackageChecksExposeSupportedPassthruTestsAndOmitUnavailableOnes = check true (
     checks.pkgs-python_native-contract == packages.python_native.passthru.tests.contract
     && !(overridden.checks.${system} ? pkgs-example-unavailable)
@@ -168,20 +155,25 @@ in
     check
       [ "example" "lean-example" ]
       [
-        package.meta.mainProgram
-        leanExample.meta.mainProgram
+        packages.example.meta.mainProgram
+        packages.lean-example.meta.mainProgram
       ];
   testPythonBuilderRequiresImportableModuleNames = check false (
-    accepts { src = "/invalid/123"; } || accepts { src = "/invalid/class"; }
+    pkgs.lib.any (src: accepts inputs.self.lib.mkPythonPackage { inherit src; }) [
+      "/invalid/123"
+      "/invalid/class"
+    ]
   );
-  testPythonBuilderReservesThePackageInitializer = check false (accepts {
-    src = ./fixtures/python_native;
-  });
+  testPythonBuilderReservesThePackageInitializer = check false (
+    accepts inputs.self.lib.mkPythonPackage {
+      src = ./fixtures/python_native;
+    }
+  );
   testPythonCheckDependenciesAreAvailableToChecksAndShells = check true (
     pkgs.lib.all
       (
         input:
-        builtins.elem input overriddenCheck.nativeBuildInputs
+        builtins.elem input overridden.checks.${system}.example.nativeBuildInputs
         && builtins.elem input overridden.devShells.${system}.example-test.nativeBuildInputs
       )
       [
@@ -196,8 +188,8 @@ in
     check
       [ false false ]
       [
-        (package.drvAttrs ? runtimeHook)
-        (leanExample.drvAttrs ? runtimeHook)
+        (packages.example.drvAttrs ? runtimeHook)
+        (packages.lean-example.drvAttrs ? runtimeHook)
       ];
   testSuiteChecksRequireAPackageWithAMatchingSuite =
     check

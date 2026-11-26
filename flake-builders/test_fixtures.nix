@@ -1,29 +1,30 @@
-{ inputs, pkgs }:
+{
+  inputs,
+  pkgs,
+  system,
+}:
 let
-  consumer = inputs.self.lib.mkFlake {
-    inputs = {
-      afairesi = inputs.self;
-      self = consumerSelf;
-    };
-    nixpkgs = {
-      config = {
-        allowUnfree = true;
-        cudaSupport = true;
+  consumer =
+    inputs.self.lib.mkFlake {
+      inputs = {
+        afairesi = inputs.self;
+        self = consumer;
       };
-      overlays = [ (_: _: { afairesiContract = true; }) ];
+      nixpkgs = {
+        config = {
+          allowUnfree = true;
+          cudaSupport = true;
+        };
+        overlays = [ (_: _: { afairesiContract = true; }) ];
+      };
+      systems = pkgs.lib.unique [
+        system
+        "x86_64-linux"
+      ];
+    }
+    // {
+      outPath = ./fixtures;
     };
-    systems = pkgs.lib.unique [
-      pkgs.stdenv.hostPlatform.system
-      "x86_64-linux"
-    ];
-  };
-  consumerSelf = consumer // {
-    outPath = consumerSource;
-    packages = builtins.mapAttrs (
-      _: packages: packages // { default = packages.example; }
-    ) consumer.packages;
-  };
-  consumerSource = ./fixtures;
   htmlPackage = inputs.self.lib.mkHtmlPackage {
     inherit pkgs;
     meta.description = "Source listing";
@@ -41,12 +42,12 @@ let
           example = overriddenPackage;
           nix-library = pkgs.writeText "different-name" "";
         };
-        outPath = consumerSource;
+        inherit (consumer) outPath;
       };
     };
     systems = [ system ];
   };
-  overriddenPackage = package.overridePythonAttrs (attributes: {
+  overriddenPackage = consumer.packages.${system}.example.overridePythonAttrs (attributes: {
     checkInputs = [ pkgs.python3Packages.six ];
     meta = (builtins.removeAttrs attributes.meta [ "description" ]) // {
       mainProgram = "renamed";
@@ -59,7 +60,6 @@ let
     };
     postInstall = ''mv "$out/bin/example" "$out/bin/renamed"'';
   });
-  package = consumer.packages.${system}.example;
   pythonLibrary = inputs.self.lib.mkPythonPackage {
     inherit pkgs;
     executable = false;
@@ -72,19 +72,14 @@ let
       mkdir -p "$out"
       printf pre > "$out/install-hooks"
     '';
-    src = ./fixtures/lean-example;
+    src = ./fixtures/example;
   };
-  system = pkgs.stdenv.hostPlatform.system;
 in
 {
   inherit
     consumer
-    consumerSelf
-    consumerSource
     htmlPackage
     overridden
-    package
     pythonLibrary
-    system
     ;
 }

@@ -1,7 +1,5 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
-"""Browse packages and named tests across the home repository's direct submodules."""
-
-# ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
+"""Browse a static inventory of test names in direct Git submodules."""
 
 import argparse
 import contextlib
@@ -742,7 +740,7 @@ def main() -> None:
         "command",
         nargs="?",
         choices=["diff"],
-        help="show package and test-name changes in direct submodules",
+        help="show package and test changes from the Git index to the working tree",
     )
     parser.add_argument(
         "--home",

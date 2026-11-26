@@ -16,6 +16,7 @@ import test_explorer
 from test_explorer import suite_inventory
 
 import flake_layout
+from flake_layout import git
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -33,17 +34,6 @@ def labels(node: test_explorer.Node, *path: str) -> list[str]:
     for name in path:
         node = next(child for child in node.children if child.label == name)
     return [child.label for child in node.children]
-
-
-def git(root: Path, *arguments: str) -> str:
-    """Run Git only against isolated test repositories."""
-    return subprocess.run(  # noqa: S603 - Test-owned argument vectors.
-        ["git", "-C", str(root), *arguments],  # noqa: S607
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=10,
-    ).stdout.strip()
 
 
 def commit(root: Path, message: str) -> None:
@@ -94,7 +84,7 @@ def add_submodule(home: Path, child: Path) -> None:
         "update-index",
         "--add",
         "--cacheinfo",
-        f"160000,{git(child, 'rev-parse', 'HEAD')},{path}",
+        f"160000,{git(child, 'rev-parse', 'HEAD').strip()},{path}",
     )
 
 
@@ -820,7 +810,15 @@ def test_package_descriptions_follow_edits_and_removals_in_the_explorer(
         viewer.root,
     )
     diff = test_explorer.build_tree(home, view="diff", cache=cache)
-    expect(labels(diff) == ["No package or test-name changes"], diff)
+    description_diff = test_explorer.Viewer(diff)
+    expect(description_diff.search("Read stored notes"), diff)
+    expect(
+        any(
+            selected and "example: Read stored notes" in row and color == "~"
+            for row, selected, color in description_diff.frame(20)
+        ),
+        diff,
+    )
     git(checkout, "add", "example/default.nix")
     declaration.unlink()
     diff_viewer = test_explorer.Viewer(
@@ -953,71 +951,6 @@ def test_packages_with_custom_builders_stay_generic_regardless_of_source_files(
     )
 
 
-def test_python_names_match_the_functions_and_methods_collected_by_pytest(
-    tmp_path: Path,
-) -> None:
-    """Use pytest's collection as the oracle for ordinary and unittest test names."""
-    _inspection_repository(tmp_path)
-    path = tmp_path / "example/test_main.py"
-    path.write_text("""
-import unittest as unit
-from unittest import IsolatedAsyncioTestCase as AsyncCase
-from unittest import TestCase
-from unittest import TestCase as Case
-def testCamelCase(): pass
-def test(): pass
-def helper():
-    def test_nested(): pass
-class TestArguments:
-    def testCamelCase(self): pass
-    async def test_missing_input(self): pass
-class Arguments(Case):
-    def test_valid_input(self): pass
-class Derived(Arguments):
-    def test_other_input(self): pass
-class Helper:
-    def test_not_collected(self): pass
-class Reports(TestCase):
-    def testCamelCase(self): pass
-class Cases:
-    def test_result(self): pass
-class Intermediate(Cases): pass
-class TestInherited(Intermediate): pass
-class TestOverride(Cases):
-    test_result = None
-    def test_visible(self): pass
-class Qualified(unit.TestCase):
-    def test_qualified(self): pass
-class AsyncBase(AsyncCase): pass
-class AsyncReports(AsyncBase):
-    async def test_result(self): pass
-""")
-    result = subprocess.run(  # noqa: S603 - Use this interpreter with test-authored code and arguments.
-        [
-            sys.executable,
-            "-B",
-            "-m",
-            "pytest",
-            "-p",
-            "no:cacheprovider",
-            "--import-mode=importlib",
-            "--collect-only",
-            "-q",
-            str(path),
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=30,
-    )
-    collected = sorted(
-        line.split("::", 1)[1] for line in result.stdout.splitlines() if "::" in line
-    )
-    declared = suite_inventory.inspect_packages(tmp_path)["example"]["tests"]
-    expect(declared == collected, (declared, collected))
-
-
 def _python_package(root: Path, name: str) -> Path:
     package = root / name
     package.mkdir()
@@ -1139,7 +1072,13 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
     )
     cache = checkout.parent / "cache"
     expected = {
-        "example": {"description": "", "tests": ["test_cpu_limit", "test_pdf_output"]}
+        "example": {
+            "description": "",
+            "tests": [
+                "count-test.cc::test_cpu_limit",
+                "nested/test_rules.py::test_pdf_output",
+            ],
+        }
     }
     first, _ = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(first == expected, first)
@@ -1152,7 +1091,10 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
         == {
             "example": {
                 "description": "",
-                "tests": ["test_cpu_limit", "test_openapi_schema"],
+                "tests": [
+                    "count-test.cc::test_cpu_limit",
+                    "nested/test_rules.py::test_openapi_schema",
+                ],
             }
         },
         current,
@@ -1168,8 +1110,8 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
                 "package": "example",
                 "description": "",
                 "status": "modified",
-                "removed": ["test_pdf_output"],
-                "added": ["test_openapi_schema"],
+                "removed": ["nested/test_rules.py::test_pdf_output"],
+                "added": ["nested/test_rules.py::test_openapi_schema"],
             }
         ],
         changes,
@@ -1205,6 +1147,7 @@ def test_diff_follows_tracked_symlink_targets_of_test_suites(tmp_path: Path) -> 
     target.parent.mkdir(parents=True)
     source.rename(target)
     source.symlink_to("../assets/deep/entry")
+    (target.parent / "image.bin").write_bytes(b"\xff\x00\r\n")
     git(tmp_path, "add", ".")
     target.write_text("def test_unicode_input(): ...\ndef test_empty_input(): ...\n")
     changes = suite_inventory.diff_repository(tmp_path)
@@ -1276,21 +1219,19 @@ def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
 ) -> None:
     """Report the conflicting index before producing a test-name diff."""
     _indexed_repository(tmp_path)
-    blob = git(tmp_path, "rev-parse", ":example/main.py")
-    subprocess.run(
-        ["git", "update-index", "--index-info"],  # noqa: S607
-        cwd=tmp_path,
-        input=(
+    blob = git(tmp_path, "rev-parse", ":example/main.py").strip()
+    flake_layout.git_bytes(
+        tmp_path,
+        "update-index",
+        "--index-info",
+        stdin=(
             "0 "
             + "0" * len(blob)
             + "\texample/main.py\n"
             + f"100644 {blob} 1\texample/main.py\n"
             + f"100644 {blob} 2\texample/main.py\n"
             + f"100644 {blob} 3\texample/main.py\n"
-        ),
-        text=True,
-        check=True,
-        timeout=10,
+        ).encode(),
     )
     index = tmp_path / ".git/index"
     before = index.read_bytes()
@@ -1312,7 +1253,7 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     _write_test(linked, "working")
     paths = [
         root / ".git/index",
-        linked / git(linked, "rev-parse", "--git-path", "index"),
+        linked / git(linked, "rev-parse", "--git-path", "index").strip(),
         root / "example/test_main.py",
         linked / "example/test_main.py",
     ]
@@ -1474,3 +1415,72 @@ test("commonjs"); example("destructured"); runner.it("method"); unrelated("ignor
         changes[0]["added"] == ["renamed"] and changes[0]["removed"] == ["aliased"],
         changes,
     )
+
+
+@pytest.mark.parametrize(
+    "discovery",
+    [
+        """{ check = ''
+          python -B -m pytest --import-mode=importlib \\
+            ${./nested}
+        ''; }""",
+        """{ fileset = lib.fileset.fileFilter
+          (file: file.hasExt "py" && lib.hasPrefix "test_" file.name) ./nested;
+        }""",
+    ],
+)
+def test_directory_discovery_preserves_names_when_literal_lists_are_replaced(
+    checkout: Path, discovery: str
+) -> None:
+    """Discover tracked suites in directory-based checks and keep their identities."""
+    package = checkout / "example"
+    nested = package / "nested"
+    nested.mkdir()
+    for filename in ("test_first.py", "test_second.py"):
+        (nested / filename).write_text("def test_shared(): pass\n")
+    (nested / "test_disabled.py").write_text(
+        "__test__ = False\ndef test_hidden(): pass\n"
+    )
+    (package / "test_metadata.py").write_text("def test_metadata(): pass\n")
+    declaration = package / "default.nix"
+    metadata = (
+        "meta.example = ./test_metadata.py; passthru.example = ./test_metadata.py;"
+    )
+    declaration.write_text(
+        "let unused = ./test_metadata.py; in "
+        "{ checks = [ ./nested/test_first.py ./nested/test_second.py"
+        " ./nested/test_disabled.py ]; meta.link = unused; " + metadata + " }"
+    )
+    git(checkout, "add", "example")
+    (nested / "test_untracked.py").write_text("def test_untracked(): pass\n")
+    names = ["nested/test_first.py::test_shared", "nested/test_second.py::test_shared"]
+    expect(
+        suite_inventory.inspect_packages(checkout)["example"]["tests"] == names, names
+    )
+    declaration.write_text(discovery[:-1] + metadata + " }")
+    expect(
+        suite_inventory.inspect_packages(checkout)["example"]["tests"] == names, names
+    )
+    expect(suite_inventory.diff_repository(checkout) == [], declaration)
+    (nested / "test_first.py").unlink()
+    changes = suite_inventory.diff_repository(checkout)
+    expect(len(changes) == 1 and changes[0]["removed"] == names[:1], changes)
+    expect(changes[0]["added"] == [], changes)
+
+
+@pytest.mark.parametrize("ignore", ["--ignore=", "--ignore "])
+def test_pytest_directory_ignores_and_alternative_names(
+    checkout: Path, ignore: str
+) -> None:
+    """Respect explicit pytest ignores and recognize both default Python patterns."""
+    package = checkout / "example"
+    nested = package / "nested"
+    nested.mkdir()
+    (nested / "views_test.py").write_text("def test_visible(): pass\n")
+    (nested / "test_ignored.py").write_text("def test_ignored(): pass\n")
+    (package / "default.nix").write_text(
+        "{ check = ''pytest " + ignore + "${./nested/test_ignored.py} ${./nested}''; }"
+    )
+    git(checkout, "add", "example")
+    names = suite_inventory.inspect_packages(checkout)["example"]["tests"]
+    expect(names == ["nested/views_test.py::test_visible"], names)

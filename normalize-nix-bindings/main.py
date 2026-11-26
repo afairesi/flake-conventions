@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Canonicalize ordering and nesting in Nix expressions."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this module as __init__.py.
-
 import argparse
 import sys
 import tempfile

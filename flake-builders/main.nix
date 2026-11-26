@@ -238,6 +238,7 @@ let
               "check"
               "--isolated"
               (ruffTarget pkgs)
+              "--config=namespace-packages=${builtins.toJSON (packageNames.python or [ ])}"
               "--no-fix"
               "--extend-select=ALL"
               "--extend-ignore=W191,E111,E114,E117,D203,D206,D300,Q000,Q001,Q002,Q003,Q004,COM812,COM819"
@@ -297,9 +298,10 @@ let
                 text = ''
                   export PYTHONPATH=
                   exec ${pkgs.lib.getExe pkgs.mypy} \
+                    --cache-dir=.mypy_cache/${name} \
                     --config-file=${pkgs.writeText "mypy.ini" "[mypy]\n"} \
                     --python-executable=${environment.python}/bin/python \
-                    --no-namespace-packages --ignore-missing-imports --strict ${pkgs.lib.escapeShellArgs sources}
+                    --no-namespace-packages --strict ${pkgs.lib.escapeShellArgs sources}
                 '';
               };
               includes = [ "${name}/*.py" ];
@@ -703,19 +705,16 @@ let
             case "$argument" in
               --no-open)
                 open_args=()
+                continue
                 ;;
-              -o|--o|-o=*|--o=*|--no-o)
+              -o)
                 open_args=()
-                server_args+=("$argument")
                 ;;
               -h|--help)
                 printf '%s\n' 'Desktop runs open the browser; --no-open disables this.'
-                server_args+=("$argument")
-                ;;
-              *)
-                server_args+=("$argument")
                 ;;
             esac
+            server_args+=("$argument")
           done
           exec http-server ${site} "''${open_args[@]}" "''${server_args[@]}"
         '';

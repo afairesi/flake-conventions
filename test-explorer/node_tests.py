@@ -1,8 +1,6 @@
 # Copyright (c) 2026- Paschalis Bizopoulos
 """Discover named JavaScript cases declared with Node's built-in test runner."""
 
-# ruff: noqa: INP001 - mkPythonPackage installs this file inside the package.
-
 from functools import cache
 from typing import TYPE_CHECKING
 

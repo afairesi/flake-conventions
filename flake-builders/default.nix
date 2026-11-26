@@ -1,6 +1,11 @@
-{ inputs, pkgs, ... }:
+{
+  inputs,
+  pkgs,
+  system,
+  ...
+}:
 let
-  inherit (import ./test_fixtures.nix { inherit inputs pkgs; }) consumer system;
+  inherit (import ./test_fixtures.nix { inherit inputs pkgs system; }) consumer;
 in
 pkgs.stdenvNoCC.mkDerivation {
   dontBuild = true;
@@ -12,7 +17,7 @@ pkgs.stdenvNoCC.mkDerivation {
   '';
   meta.description = "Nix library for Afairesi packages, checks, formatters, and hosts";
   passthru.tests = {
-    consumer = import ./test_consumer.nix { inherit inputs pkgs; };
+    consumer = import ./test_consumer.nix { inherit inputs pkgs system; };
   }
   // pkgs.lib.optionalAttrs (consumer.checks.${system} ? exampleVm) {
     inherit (consumer.checks.${system}) exampleVm;
