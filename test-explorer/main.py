@@ -16,14 +16,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, overload
 
 from test_explorer import suite_inventory
 
 import flake_layout
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Iterator
 
 XTERM_ORANGE = 208
 RGB_COLORS = 1 << 24
@@ -123,14 +123,20 @@ def _is_cached_view(value: object, view: View) -> bool:
             and _is_name_list(package.get("tests"))
             for package in value.values()
         )
-    return isinstance(value, list) and all(
+    if not (
+        isinstance(value, dict)
+        and isinstance(value.get("description_changed"), bool)
+        and isinstance(value.get("packages"), list)
+    ):
+        return False
+    return all(
         isinstance(change, dict)
         and isinstance(change.get("package"), str)
         and isinstance(change.get("description"), str)
         and change.get("status") in ("added", "removed", "modified")
         and _is_name_list(change.get("added"))
         and _is_name_list(change.get("removed"))
-        for change in value
+        for change in value["packages"]
     )
 
 
@@ -152,10 +158,22 @@ def _write_cache_entry(path: Path, value: object) -> None:
             Path(pending.name).replace(path)
 
 
+@overload
+def cached_output(
+    root: Path, view: Literal["tests"], cache: Path, *, refresh: bool
+) -> tuple[dict[str, suite_inventory.PackageInfo], bool]: ...
+
+
+@overload
+def cached_output(
+    root: Path, view: Literal["diff"], cache: Path, *, refresh: bool
+) -> tuple[suite_inventory.RepositoryDiff, bool]: ...
+
+
 def cached_output(
     root: Path, view: View, cache: Path, *, refresh: bool
 ) -> tuple[
-    dict[str, suite_inventory.PackageInfo] | list[suite_inventory.PackageChange], bool
+    dict[str, suite_inventory.PackageInfo] | suite_inventory.RepositoryDiff, bool
 ]:
     """Reuse stable inspections for the same installed explorer, checkout and view."""
     key = hashlib.sha256(
@@ -175,7 +193,7 @@ def cached_output(
     value = (
         suite_inventory.inspect_packages(root)
         if view == "tests"
-        else suite_inventory.diff_repository(root)
+        else suite_inventory.compare_repository(root)
     )
     if before is not None and fingerprint(root, view) == before:
         _write_cache_entry(path, {"fingerprint": before, "value": value})
@@ -210,24 +228,16 @@ def _repository_node(
             message = "The registered path is not a repository checkout within home."
             raise ValueError(message)
         node.description = suite_inventory.flake_description(root)
-        value, hit = cached_output(root, view, cache, refresh=refresh)
-        if isinstance(value, dict):
-            packages = value
-            status = flake_layout.git(
-                root,
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-                "--ignore-submodules=all",
-            )
-            if status:
-                node.change = "~"
-                if any(line[1] != " " for line in status.rstrip("\n").split("\n")):
-                    value, diff_hit = cached_output(
-                        root, "diff", cache, refresh=refresh
-                    )
-                    hit = hit and diff_hit
-        add_tests(node, packages, value if isinstance(value, list) else ())
+        hit = True
+        if view == "tests":
+            packages, hit = cached_output(root, "tests", cache, refresh=refresh)
+        diff = None
+        if view == "diff" or flake_layout.git_bytes(
+            root, "diff", "--name-only", "-z", "--ignore-submodules=all"
+        ):
+            diff, diff_hit = cached_output(root, "diff", cache, refresh=refresh)
+            hit = hit and diff_hit
+        add_tests(node, packages, diff)
     except READ_ERRORS as error:
         if packages is not None:
             add_tests(node, packages)
@@ -286,7 +296,7 @@ def build_tree(
         ]
         for completed, future in enumerate(as_completed(futures), 1):
             identifier, node, status = future.result()
-            if node.children:
+            if node.children or node.change:
                 repositories_by_path[identifier] = node
             if progress is not None:
                 detail = f"[{completed}/{total}] {identifier}: {status}"
@@ -294,7 +304,7 @@ def build_tree(
     tree = _directory_tree(home, repositories_by_path)
     if not tree.children:
         tree.add(
-            "No package or test-name changes"
+            "No inventory changes"
             if view == "diff"
             else "No direct registered submodules."
         )
@@ -376,14 +386,17 @@ class Node:
     children: list[Node] = field(default_factory=list)
     expanded: bool = False
     change: str = ""
-    detail: str = ""
+    test_count: int | None = None
     source_label: str = ""
     description: str = ""
 
     @property
     def display_label(self) -> str:
-        """Append the optional description to the row's stable label."""
-        return f"{self.label}: {self.description}" if self.description else self.label
+        """Show the test count beside the name, followed by the description."""
+        label = self.label
+        if self.test_count is not None:
+            label += f" ({self.test_count})"
+        return f"{label}: {self.description}" if self.description else label
 
     def add(self, label: str, *, change: str = "") -> Node:
         """Append a folded child and return it for further details."""
@@ -431,7 +444,7 @@ def _directory_tree(home: Path, repositories_by_path: dict[str, Node]) -> Node:
 def add_tests(
     node: Node,
     packages: dict[str, suite_inventory.PackageInfo] | None,
-    changes: Sequence[suite_inventory.PackageChange] = (),
+    diff: suite_inventory.RepositoryDiff | None = None,
 ) -> None:
     """Mark changed tests and include current tests and counts in the tests view."""
     names = {
@@ -439,6 +452,9 @@ def add_tests(
         for name, info in (packages or {}).items()
     }
     package_changes = {}
+    changes = diff["packages"] if diff is not None else ()
+    if diff is not None and (diff["description_changed"] or changes):
+        node.change = "~"
     for change in changes:
         package = change["package"]
         marker = {"added": "+", "removed": "-", "modified": "~"}[change["status"]]
@@ -455,15 +471,13 @@ def add_tests(
         child.description = description
         if packages is not None:
             info = packages.get(package)
-            child.detail = str(len(info["tests"]) if info else 0)
+            child.test_count = len(info["tests"]) if info else 0
             if info:
                 child.description = info["description"]
         for name, marker in sorted(
             test_changes.items(), key=lambda item: (item[1] != "-", item[0])
         ):
             child.add_test(name, change=marker)
-    if changes:
-        node.change = "~"
 
 
 class Viewer:
@@ -606,8 +620,6 @@ class Viewer:
                 char if char.isprintable() else repr(char)[1:-1]
                 for char in node.display_label
             )
-            if node.detail:
-                label += f" ({node.detail})"
             result.append(
                 (
                     f"{'  ' * depth}{marker} {label}"[self.horizontal :],
@@ -740,7 +752,10 @@ def main() -> None:
         "command",
         nargs="?",
         choices=["diff"],
-        help="show package and test changes from the Git index to the working tree",
+        help=(
+            "show package, description, and test-name changes "
+            "from the Git index to the working tree"
+        ),
     )
     parser.add_argument(
         "--home",

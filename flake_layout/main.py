@@ -36,6 +36,7 @@ PACKAGE_TEST_FILES = {
     "python": "test_main.py",
 }
 ROOT_FILES = ("flake.lock", "flake.nix")
+GIT = "git"
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,8 @@ class Package:
 
 def git_bytes(root: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
     """Run Git with optional binary input and preserve its output byte for byte."""
-    completed = subprocess.run(  # noqa: S603 - Git arguments are passed without a shell.
-        ["git", "--no-optional-locks", "-C", str(root), *arguments],  # noqa: S607
+    completed = subprocess.run(  # noqa: S603 - The package pins Git and passes arguments without a shell.
+        [GIT, "--no-optional-locks", "-C", str(root), *arguments],
         input=stdin,
         capture_output=True,
         check=False,

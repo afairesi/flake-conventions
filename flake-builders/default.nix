@@ -1,6 +1,7 @@
 {
   inputs,
   pkgs,
+  pname,
   system,
   ...
 }:
@@ -8,6 +9,7 @@ let
   inherit (import ./test_fixtures.nix { inherit inputs pkgs system; }) consumer;
 in
 pkgs.stdenvNoCC.mkDerivation {
+  inherit pname;
   dontBuild = true;
   installPhase = ''
     runHook preInstall
@@ -22,7 +24,6 @@ pkgs.stdenvNoCC.mkDerivation {
   // pkgs.lib.optionalAttrs (consumer.checks.${system} ? exampleVm) {
     inherit (consumer.checks.${system}) exampleVm;
   };
-  pname = baseNameOf ./.;
   src = ./.;
   version = "0.0.0";
 }

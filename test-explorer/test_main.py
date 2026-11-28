@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def expect(condition: bool, detail: object) -> None:  # noqa: FBT001
-    """Report an unexpected result with its observed value."""
+def expect(condition: object, detail: object) -> None:
+    """Require a truthy result and report the observed value on failure."""
     if not condition:
         raise AssertionError(detail)
 
@@ -131,7 +131,7 @@ def test_home_tree_groups_direct_submodules_by_path_without_modifying_them(
     expect(
         all(
             colors["▾ " + label] == "~"
-            for label in (str(home), *project, "example: Example (1)")
+            for label in (str(home), *project, "example (1): Example")
         ),
         colors,
     )
@@ -325,15 +325,22 @@ def test_a_timed_out_checkout_reports_an_inspection_error(
     )
 
 
-def test_cached_test_names_show_the_current_git_status(
+def test_unrelated_edits_leave_cached_packages_and_their_ancestors_uncolored(
     home: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A cache hit still shows staged changes and reports startup progress."""
+    """Staged and unstaged implementation edits leave an unchanged inventory plain."""
     cache = home.parent / "cache"
     cached = home / "gitlab.com/owner/project"
     test_explorer.cached_output(cached, "tests", cache, refresh=False)
     (cached / "notes.txt").touch()
     git(cached, "add", "notes.txt")
+    working = home / "github.com/owner/project"
+    (working / "example/main.py").write_text("def unfinished(")
+    (working / "example/test_main.py").write_text(
+        'def test_default_output():\n    raise RuntimeError("edited test body")\n'
+    )
+    (working / "untracked").mkdir()
+    (working / "untracked/default.nix").write_text("{}")
     tree = test_explorer.build_tree(
         home, cache=cache, progress=test_explorer.write_startup_progress
     )
@@ -342,13 +349,15 @@ def test_cached_test_names_show_the_current_git_status(
         tree,
     )
     viewer = test_explorer.Viewer(tree)
-    expect(viewer.search("gitlab.com"), tree)
-    expect(
-        any(selected and color == "~" for _, selected, color in viewer.frame(8)), tree
-    )
+    for _ in range(2):
+        expect(viewer.search("test_default_output"), tree)
+    rows = viewer.frame(30)
+    expect(all(not color for _, _, color in rows), rows)
     progress = capsys.readouterr().err
     expect("2 direct submodules" in progress and "[2/2]" in progress, progress)
     expect("gitlab.com/owner/project: cached" in progress, progress)
+    diff = test_explorer.build_tree(home, "diff", cache=cache)
+    expect(labels(diff) == ["No inventory changes"], diff)
 
 
 def test_home_tree_requires_a_git_root_and_accepts_one_without_submodules(
@@ -366,7 +375,7 @@ def test_home_tree_requires_a_git_root_and_accepts_one_without_submodules(
         tree,
     )
     differences = test_explorer.build_tree(tmp_path, cache=cache, view="diff")
-    expect(labels(differences) == ["No package or test-name changes"], differences)
+    expect(labels(differences) == ["No inventory changes"], differences)
     child = tmp_path / "directory"
     child.mkdir()
     with pytest.raises(ValueError, match="repository root"):
@@ -385,7 +394,7 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
     source = checkout / "example/test_main.py"
     source.write_text("def test_working(): ...\n")
     first, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
-    expect(bool(first) and not hit, first)
+    expect(not hit, "first inspection used a cached result")
     (checkout / "example/main.py").write_text("irrelevant")
     git(checkout, "add", "example/main.py")
     (nested / "example/test_main.py").write_text("def test_nested(): ...\n")
@@ -407,7 +416,10 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
             staged,
         )
     else:
-        expect(not hit and staged == [], staged)
+        expect(
+            not hit and staged == {"description_changed": False, "packages": []},
+            staged,
+        )
     commit(checkout, "updated")
     committed, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(hit and committed == staged, committed)
@@ -420,7 +432,7 @@ def test_both_views_reuse_cached_results_until_their_test_inputs_change(
         == (
             {"example": {"description": "Example", "tests": []}}
             if view == "tests"
-            else []
+            else {"description_changed": False, "packages": []}
         ),
         untracked,
     )
@@ -437,7 +449,11 @@ def test_views_are_reloaded_when_the_cache_is_damaged_or_unavailable(
     expected, _ = test_explorer.cached_output(checkout, view, cache, refresh=False)
     entry = next(cache.glob("*.json"))
     saved = json.loads(entry.read_text())
-    invalid = {"example": [None]} if view == "tests" else [{}]
+    invalid = (
+        {"example": [None]}
+        if view == "tests"
+        else {"description_changed": False, "packages": [{}]}
+    )
     entry.write_text(json.dumps({**saved, "value": invalid}))
     actual, hit = test_explorer.cached_output(checkout, view, cache, refresh=False)
     expect(not hit and actual == expected, actual)
@@ -613,22 +629,25 @@ def test_selected_additions_and_removals_keep_their_colors_when_highlighted(
     test_explorer.add_tests(
         tree,
         None,
-        [
-            {
-                "package": "new",
-                "description": "",
-                "status": "added",
-                "added": [],
-                "removed": [],
-            },
-            {
-                "package": "old",
-                "description": "",
-                "status": "removed",
-                "added": [],
-                "removed": [],
-            },
-        ],
+        {
+            "description_changed": False,
+            "packages": [
+                {
+                    "package": "new",
+                    "description": "",
+                    "status": "added",
+                    "added": [],
+                    "removed": [],
+                },
+                {
+                    "package": "old",
+                    "description": "",
+                    "status": "removed",
+                    "added": [],
+                    "removed": [],
+                },
+            ],
+        },
     )
     test_explorer.browse(screen, tree, "diff", Mock())
     pairs.assert_has_calls(
@@ -769,13 +788,52 @@ def test_opening_a_home_checkout_lets_the_reader_find_a_test_by_its_words(
     labels = [row.args[2].strip() for row in rows]
     expect(f"▾ {home}: Development checkouts" in labels, labels)
     expect(
-        "▾ project: Project tools" in labels and "▾ example: Example (1)" in labels,
+        "▾ project: Project tools" in labels and "▾ example (1): Example" in labels,
         labels,
     )
     selected = [
         row.args[2].strip() for row in rows[:-1] if row.args[4] & curses.A_REVERSE
     ]
     expect(selected == ["keeps saved notes"], selected)
+
+
+@pytest.mark.parametrize("view", ["tests", "diff"])
+def test_a_changed_flake_description_highlights_only_its_repository_and_ancestors(
+    home: Path, view: test_explorer.View
+) -> None:
+    """Compare the displayed description even when every package stays the same."""
+    checkout = home / "github.com/owner/project"
+    flake = checkout / "flake.nix"
+    cache = home.parent / "cache"
+    flake.write_text('{ description = "Project tools"; }')
+    tree = test_explorer.build_tree(home, view=view, cache=cache)
+    viewer = test_explorer.Viewer(tree)
+    expect(viewer.search("Project tools"), tree)
+    rows = {row.strip(): color for row, _, color in viewer.frame(20)}
+    expect(
+        rows["▾ " + str(home)] == rows["▾ github.com"] == rows["▾ owner"] == "~",
+        rows,
+    )
+    expect(
+        any(
+            selected and row.endswith("project: Project tools") and color == "~"
+            for row, selected, color in viewer.frame(20)
+        ),
+        rows,
+    )
+    if view == "tests":
+        expect(viewer.search("example"), tree)
+        expect(
+            any(
+                selected and not color and "example (1): Example" in row
+                for row, selected, color in viewer.frame(20)
+            ),
+            tree,
+        )
+    git(checkout, "add", "flake.nix")
+    flake.write_text('{ description = "Project tools"; } # a comment\n')
+    refreshed = test_explorer.build_tree(home, view=view, cache=cache)
+    expect(not refreshed.change, refreshed)
 
 
 def test_package_descriptions_follow_edits_and_removals_in_the_explorer(
@@ -798,13 +856,16 @@ def test_package_descriptions_follow_edits_and_removals_in_the_explorer(
         rows,
     )
     expect(
-        any(row.strip() == "▾ example: Read stored notes (1)" for row, _, _ in rows),
+        any(
+            row.strip() == "▾ example (1): Read stored notes" and color == "~"
+            for row, _, color in rows
+        ),
         rows,
     )
     expect(viewer.search("read stored"), rows)
     expect(
         any(
-            selected and "example: Read stored notes" in row
+            selected and "example (1): Read stored notes" in row
             for row, selected, _ in viewer.frame(20)
         ),
         viewer.root,
@@ -1082,7 +1143,8 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
     }
     first, _ = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(first == expected, first)
-    expect(suite_inventory.diff_repository(checkout) == [], "unexpected name changes")
+    diff = suite_inventory.compare_repository(checkout)
+    expect(diff == {"description_changed": False, "packages": []}, diff)
     python.write_text("def test_openapi_schema(): pass\n")
     current, hit = test_explorer.cached_output(checkout, "tests", cache, refresh=False)
     expect(
@@ -1102,7 +1164,7 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
     display = test_explorer.Node("example")
     display.add_test("test_openapi_schema")
     expect(labels(display) == ["OpenAPI schema"], display)
-    changes = suite_inventory.diff_repository(checkout)
+    changes = suite_inventory.compare_repository(checkout)["packages"]
     expect(
         changes
         == [
@@ -1118,39 +1180,17 @@ def test_declared_auxiliary_suites_list_their_tracked_and_registered_behaviors(
     )
 
 
-def test_diff_ignores_implementation_edits_and_untracked_packages(
-    tmp_path: Path,
-) -> None:
-    """Only changes to the package-to-test-name mapping produce output."""
-    _inspection_repository(tmp_path)
-    git(tmp_path, "init", "--quiet")
-    expect(not suite_inventory.diff_repository(tmp_path), "untracked files in diff")
-    git(tmp_path, "add", ".")
-    source = tmp_path / "example/main.py"
-    source.write_text("def unfinished(")
-    tests = tmp_path / "example/test_main.py"
-    tests.write_text(
-        'def test_default_output():\n    """Updated notes."""\n'
-        '    raise RuntimeError("changed")\n',
-    )
-    (tmp_path / "untracked").mkdir()
-    (tmp_path / "untracked/default.nix").write_text("{}")
-    difference = suite_inventory.diff_repository(tmp_path)
-    expect(not difference, difference)
-
-
-def test_diff_follows_tracked_symlink_targets_of_test_suites(tmp_path: Path) -> None:
+def test_diff_follows_tracked_symlink_targets_of_test_suites(checkout: Path) -> None:
     """Keep deeply nested symlink targets in both snapshots."""
-    _indexed_repository(tmp_path)
-    source = tmp_path / "example/test_main.py"
-    target = tmp_path / "assets/deep/entry"
+    source = checkout / "example/test_main.py"
+    target = checkout / "assets/deep/entry"
     target.parent.mkdir(parents=True)
     source.rename(target)
     source.symlink_to("../assets/deep/entry")
     (target.parent / "image.bin").write_bytes(b"\xff\x00\r\n")
-    git(tmp_path, "add", ".")
+    git(checkout, "add", ".")
     target.write_text("def test_unicode_input(): ...\ndef test_empty_input(): ...\n")
-    changes = suite_inventory.diff_repository(tmp_path)
+    changes = suite_inventory.compare_repository(checkout)["packages"]
     expect(
         changes
         == [
@@ -1177,7 +1217,7 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
     git(root, "add", "--", "shared")
     (shared / "default.nix").unlink()
     expect(suite_inventory.inspect_packages(root) == {}, shared)
-    changes = suite_inventory.diff_repository(root)
+    changes = suite_inventory.compare_repository(root)["packages"]
     expect(
         changes
         == [
@@ -1199,29 +1239,26 @@ def test_removing_a_package_drops_its_entry_even_when_it_shares_a_host(
 
 
 def test_a_failed_test_name_comparison_removes_its_temporary_snapshots(
-    tmp_path: Path,
+    checkout: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Clean failed snapshots when a tracked source cannot be inspected."""
-    root = tmp_path / "repository"
-    _indexed_repository(root)
-    scratch = tmp_path / "scratch"
+    scratch = checkout.parent / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
-    (root / "example/test_main.py").write_text("def invalid(")
+    (checkout / "example/test_main.py").write_text("def invalid(")
     with pytest.raises(ValueError, match="could not parse Python source"):
-        suite_inventory.diff_repository(root)
+        suite_inventory.compare_repository(checkout)
     expect(not list(scratch.iterdir()), "failed diff left temporary sources")
 
 
 def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
-    tmp_path: Path,
+    checkout: Path,
 ) -> None:
     """Report the conflicting index before producing a test-name diff."""
-    _indexed_repository(tmp_path)
-    blob = git(tmp_path, "rev-parse", ":example/main.py").strip()
+    blob = git(checkout, "rev-parse", ":example/main.py").strip()
     flake_layout.git_bytes(
-        tmp_path,
+        checkout,
         "update-index",
         "--index-info",
         stdin=(
@@ -1233,32 +1270,31 @@ def test_diff_reports_unresolved_merge_conflicts_and_leaves_the_index_untouched(
             + f"100644 {blob} 3\texample/main.py\n"
         ).encode(),
     )
-    index = tmp_path / ".git/index"
+    index = checkout / ".git/index"
     before = index.read_bytes()
     with pytest.raises(ValueError, match="unmerged index"):
-        suite_inventory.diff_repository(tmp_path)
+        suite_inventory.compare_repository(checkout)
     expect(index.read_bytes() == before, "diff modified the conflicted index")
 
 
 def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
-    tmp_path: Path,
+    checkout: Path,
 ) -> None:
     """Compare the linked worktree's staged and working sources without edits."""
-    root, linked = tmp_path / "repository", tmp_path / "linked"
-    _indexed_repository(root)
-    commit(root, "initial")
-    git(root, "worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
+    linked = checkout.parent / "linked"
+    commit(checkout, "initial")
+    git(checkout, "worktree", "add", "--quiet", "--detach", str(linked), "HEAD")
     _write_test(linked, "staged")
     git(linked, "add", "example/test_main.py")
     _write_test(linked, "working")
     paths = [
-        root / ".git/index",
+        checkout / ".git/index",
         linked / git(linked, "rev-parse", "--git-path", "index").strip(),
-        root / "example/test_main.py",
+        checkout / "example/test_main.py",
         linked / "example/test_main.py",
     ]
     before = [path.read_bytes() for path in paths]
-    changes = suite_inventory.diff_repository(linked)
+    changes = suite_inventory.compare_repository(linked)["packages"]
     expect(
         changes
         == [
@@ -1275,21 +1311,24 @@ def test_diff_reads_the_selected_linked_worktree_without_modifying_it(
     expect([path.read_bytes() for path in paths] == before, "diff modified files")
 
 
-def test_inspection_omits_untracked_packages_and_test_files(
-    root: Path,
-) -> None:
+def test_inspection_omits_untracked_packages_and_test_files(tmp_path: Path) -> None:
     """Skip malformed local declarations and suites until they are tracked."""
-    _python_package(root, "example")
-    (root / "library").mkdir()
-    (root / "library/default.nix").write_text("{}")
-    git(root, "add", ".")
-    (root / "example/test_main.py").write_text("def broken(:")
-    (root / "library/test_main.nix").write_text("{ invalid")
-    local = root / "experiments"
+    git(tmp_path, "init", "--quiet")
+    (tmp_path / "flake.nix").write_text("{}")
+    (tmp_path / "flake.lock").touch()
+    _python_package(tmp_path, "example")
+    (tmp_path / "library").mkdir()
+    (tmp_path / "library/default.nix").write_text("{}")
+    diff = suite_inventory.compare_repository(tmp_path)
+    expect(diff == {"description_changed": False, "packages": []}, diff)
+    git(tmp_path, "add", ".")
+    (tmp_path / "example/test_main.py").write_text("def broken(:")
+    (tmp_path / "library/test_main.nix").write_text("{ invalid")
+    local = tmp_path / "experiments"
     local.mkdir()
     (local / "default.nix").write_text("{ invalid")
-    flake_layout.validate_flake_source(root)
-    inventory = suite_inventory.inspect_packages(root)
+    flake_layout.validate_flake_source(tmp_path)
+    inventory = suite_inventory.inspect_packages(tmp_path)
     expect(
         inventory
         == {
@@ -1349,7 +1388,7 @@ test = false
     )
     suite = package / "src/shared.rs"
     suite.write_text(suite.read_text().replace("preserves", "retains"))
-    changes = suite_inventory.diff_repository(root)
+    changes = suite_inventory.compare_repository(root)["packages"]
     expect(
         changes
         == [
@@ -1370,7 +1409,10 @@ def test_node_packages_list_and_diff_tracked_builtin_runner_cases(root: Path) ->
     package = root / "registry"
     nested = package / "test"
     nested.mkdir(parents=True)
-    (package / "default.nix").write_text("{ pkgs, ... }: pkgs.buildNpmPackage {}")
+    (package / "default.nix").write_text(
+        "{ pkgs, ... }: pkgs.buildNpmPackage { "
+        "checkPhase = ''node --test ${./test.mjs}''; }"
+    )
     (package / "package.json").write_text("{}")
     suite = package / "test.mjs"
     suite.write_text(
@@ -1392,6 +1434,10 @@ const {it: unrelated} = other("node:test");
 test("commonjs"); example("destructured"); runner.it("method"); unrelated("ignored");
 """
     )
+    dependency = package / "node_modules/dependency/test.js"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text("import t from 'node:test'; t('dependency case')")
+    git(root, "add", "--force", str(dependency))
     git(root, "add", ".")
     (package / "untracked.test.js").write_text("import t from 'node:test'; t('local')")
     expected = sorted(
@@ -1409,7 +1455,7 @@ test("commonjs"); example("destructured"); runner.it("method"); unrelated("ignor
     inventory = suite_inventory.inspect_packages(root)
     expect(inventory["registry"]["tests"] == expected, inventory)
     suite.write_text(suite.read_text().replace("aliased", "renamed"))
-    changes = suite_inventory.diff_repository(root)
+    changes = suite_inventory.compare_repository(root)["packages"]
     expect(len(changes) == 1, changes)
     expect(
         changes[0]["added"] == ["renamed"] and changes[0]["removed"] == ["aliased"],
@@ -1420,16 +1466,15 @@ test("commonjs"); example("destructured"); runner.it("method"); unrelated("ignor
 @pytest.mark.parametrize(
     "discovery",
     [
-        """{ check = ''
+        """check = ''
           python -B -m pytest --import-mode=importlib \\
             ${./nested}
-        ''; }""",
-        """{ fileset = lib.fileset.fileFilter
-          (file: file.hasExt "py" && lib.hasPrefix "test_" file.name) ./nested;
-        }""",
+        '';""",
+        """fileset = lib.fileset.fileFilter
+          (file: file.hasExt "py" && lib.hasPrefix "test_" file.name) ./nested;""",
     ],
 )
-def test_directory_discovery_preserves_names_when_literal_lists_are_replaced(
+def test_directory_checks_discover_tracked_suites_and_report_removed_tests(
     checkout: Path, discovery: str
 ) -> None:
     """Discover tracked suites in directory-based checks and keep their identities."""
@@ -1442,14 +1487,9 @@ def test_directory_discovery_preserves_names_when_literal_lists_are_replaced(
         "__test__ = False\ndef test_hidden(): pass\n"
     )
     (package / "test_metadata.py").write_text("def test_metadata(): pass\n")
-    declaration = package / "default.nix"
-    metadata = (
-        "meta.example = ./test_metadata.py; passthru.example = ./test_metadata.py;"
-    )
-    declaration.write_text(
-        "let unused = ./test_metadata.py; in "
-        "{ checks = [ ./nested/test_first.py ./nested/test_second.py"
-        " ./nested/test_disabled.py ]; meta.link = unused; " + metadata + " }"
+    (package / "default.nix").write_text(
+        f"let unused = ./test_metadata.py; in {{ {discovery} "
+        "meta.example = ./test_metadata.py; passthru.example = ./test_metadata.py; }"
     )
     git(checkout, "add", "example")
     (nested / "test_untracked.py").write_text("def test_untracked(): pass\n")
@@ -1457,13 +1497,8 @@ def test_directory_discovery_preserves_names_when_literal_lists_are_replaced(
     expect(
         suite_inventory.inspect_packages(checkout)["example"]["tests"] == names, names
     )
-    declaration.write_text(discovery[:-1] + metadata + " }")
-    expect(
-        suite_inventory.inspect_packages(checkout)["example"]["tests"] == names, names
-    )
-    expect(suite_inventory.diff_repository(checkout) == [], declaration)
     (nested / "test_first.py").unlink()
-    changes = suite_inventory.diff_repository(checkout)
+    changes = suite_inventory.compare_repository(checkout)["packages"]
     expect(len(changes) == 1 and changes[0]["removed"] == names[:1], changes)
     expect(changes[0]["added"] == [], changes)
 

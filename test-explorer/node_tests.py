@@ -28,24 +28,6 @@ def is_node_suite(path: Path) -> bool:
     )
 
 
-def node_suites(package: Path, tracked: set[Path] | None) -> Iterator[Path]:
-    """List default suites inside an npm package or its Git index snapshot."""
-    if tracked is not None:
-        for path in tracked:
-            if path.parts[0] == package.name and is_node_suite(
-                path.relative_to(package.name)
-            ):
-                yield package.parent / path
-        return
-    for directory, directories, filenames in package.walk():
-        if "node_modules" in directories:
-            directories.remove("node_modules")
-        for filename in filenames:
-            suite = directory / filename
-            if is_node_suite(suite.relative_to(package)):
-                yield suite
-
-
 @cache
 def _query(pattern: str) -> Query:
     return Query(get_language("javascript"), pattern)

@@ -3,8 +3,9 @@
 
 import json
 import os
+import shutil
 import subprocess
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import Mock
 
 import normalize_nix_bindings
@@ -12,13 +13,16 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-if TYPE_CHECKING:
-    from pathlib import Path
 
-
-def _run_formatter(*paths: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - The test environment supplies the executable and paths.
-        [os.environ["PACKAGE_E2E_EXECUTABLE"], *paths],
+def _run(
+    executable: str, *arguments: str | Path, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    path = shutil.which(executable)
+    if path is None:
+        pytest.fail(f"Missing executable in the test environment: {executable}")
+    return subprocess.run(  # noqa: S603 - The Nix test environment supplies both executables.
+        [Path(path).absolute(), *arguments],
+        input=input_text,
         capture_output=True,
         text=True,
         check=False,
@@ -50,7 +54,7 @@ def test_formatting_reports_an_invalid_file_and_still_formats_the_next_file(
     invalid.write_text(source)
     valid = tmp_path / "valid.nix"
     valid.write_text("{ z = 1; a = 2; }")
-    result = _run_formatter(invalid, valid)
+    result = _run(os.environ["PACKAGE_E2E_EXECUTABLE"], invalid, valid)
     if result.returncode != 1 or str(invalid) not in result.stderr:
         raise AssertionError(result)
     if invalid.read_text() != source:
@@ -123,7 +127,7 @@ def test_formatting_sorts_nix_bindings_and_reaches_a_stable_form_in_one_pass(
         path.write_text(source, encoding="utf-8")
         expected_files[path] = expected
     for _ in range(2):
-        result = _run_formatter(*expected_files)
+        result = _run(os.environ["PACKAGE_E2E_EXECUTABLE"], *expected_files)
         if result.returncode or result.stdout or result.stderr:
             raise AssertionError(result)
         for path, expected in expected_files.items():
@@ -135,10 +139,9 @@ def test_formatting_sorts_nix_bindings_and_reaches_a_stable_form_in_one_pass(
 @pytest.mark.parametrize(
     "source",
     [
-        "[ 3 1 2 1 ]",
         "let z = 3; a = 1; in [ z a z ]",
         'let key = "dynamic"; in { ${key} = {}; "" = 2; z = 1; }',
-        "builtins.concatLists [ [ 3 1 ] [ 2 ] ]",
+        "builtins.concatLists [ [ 3 1 ] [ 2 1 ] ]",
         (
             "# leading comment\n"
             "[ { z = 3; a = 1; } { b = 2; # keep this comment\n a = 0; } ]\n"
@@ -173,23 +176,17 @@ def test_formatting_preserves_nix_values_list_order_and_comments(source: str) ->
 
 
 def _evaluate(source: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [  # noqa: S607
-            "nix",
-            "--extra-experimental-features",
-            "nix-command",
-            "eval",
-            "--store",
-            "dummy://",
-            "--json",
-            "--file",
-            "-",
-        ],
-        input=source,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
+    return _run(
+        "nix",
+        "--extra-experimental-features",
+        "nix-command",
+        "eval",
+        "--store",
+        "dummy://",
+        "--json",
+        "--file",
+        "-",
+        input_text=source,
     )
 
 

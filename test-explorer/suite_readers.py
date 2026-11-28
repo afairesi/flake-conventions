@@ -16,11 +16,14 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 
+SHFMT = "shfmt"
+
+
 def bats_test_names(path: Path) -> set[str]:
     """Read top-level Bats declarations without sourcing the shell program."""
     source = path.read_bytes()
-    parsed = subprocess.run(
-        ["shfmt", "-ln", "bats", "--to-json"],  # noqa: S607
+    parsed = subprocess.run(  # noqa: S603 - The package pins shfmt and passes source on stdin.
+        [SHFMT, "-ln", "bats", "--to-json"],
         input=source,
         capture_output=True,
         check=False,

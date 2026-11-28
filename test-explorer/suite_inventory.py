@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
 
-from test_explorer.node_tests import is_node_suite, node_suites, node_test_names
+from test_explorer.node_tests import is_node_suite, node_test_names
 from test_explorer.rust import rust_test_names
 from test_explorer.suite_readers import (
     bats_test_names,
@@ -53,6 +53,13 @@ class PackageChange(TypedDict):
     status: PackageStatus
     added: list[str]
     removed: list[str]
+
+
+class RepositoryDiff(TypedDict):
+    """Changes to the repository description and package rows shown in the tree."""
+
+    description_changed: bool
+    packages: list[PackageChange]
 
 
 def _description(
@@ -287,23 +294,22 @@ def inspect_packages(root: Path) -> dict[str, PackageInfo]:
     if not (root / "flake.nix").is_file():
         message = f"{root}: missing flake.nix"
         raise ValueError(message)
-    tracked = (
+    indexed = (root / ".git").exists()
+    paths = (
         {
             Path(name)
             for name in flake_layout.git(root, "ls-files", "-z").split("\0")
             if name
         }
-        if (root / ".git").exists()
-        else None
-    )
-    paths = (
-        tracked
-        if tracked is not None
+        if indexed
         else {
             directory.relative_to(root) / name
             for directory, _, filenames in root.walk()
             for name in filenames
         }
+    )
+    tracked_rust = (
+        {root / path for path in paths if path.suffix == ".rs"} if indexed else None
     )
     packages, _ = flake_layout.detect_packages(root, paths)
     inventory: dict[str, PackageInfo] = {}
@@ -313,38 +319,29 @@ def inspect_packages(root: Path) -> dict[str, PackageInfo]:
         relative_paths = {
             path.relative_to(name) for path in paths if path.is_relative_to(name)
         }
-        suites = _declared_suites(package, relative_paths)
-        primary = (
-            Path(flake_layout.PACKAGE_TEST_FILES[package.kind])
-            if package.kind in TEST_READERS
-            else None
-        )
-        if primary is not None:
-            suites[primary] = TEST_READERS[package.kind]
+        primary: dict[Path, Callable[[Path], set[str]]] = {}
+        if reader := TEST_READERS.get(package.kind):
+            primary[Path(flake_layout.PACKAGE_TEST_FILES[package.kind])] = reader
+        if (
+            package.kind == "generic"
+            and Path("package.json") in relative_paths
+            and (package.root / "package.json").is_file()
+        ):
+            primary.update(
+                dict.fromkeys(filter(is_node_suite, relative_paths), node_test_names)
+            )
+        suites = _declared_suites(package, relative_paths) | primary
         for suite, read_names in suites.items():
             source = package.root / suite
             if suite in relative_paths and source.is_file():
-                prefix = "" if suite == primary else f"{suite.as_posix()}::"
+                prefix = "" if suite in primary else f"{suite.as_posix()}::"
                 names.update(prefix + test for test in read_names(source))
         if (
             package.kind == "generic"
-            and Path(name) / "Cargo.toml" in paths
+            and Path("Cargo.toml") in relative_paths
             and (package.root / "Cargo.toml").is_file()
         ):
-            tracked_rust = (
-                None
-                if tracked is None
-                else {root / path for path in tracked if path.suffix == ".rs"}
-            )
             names.update(rust_test_names(package.root, tracked_rust))
-        if (
-            package.kind == "generic"
-            and Path(name) / "package.json" in paths
-            and (package.root / "package.json").is_file()
-        ):
-            for suite in node_suites(package.root, tracked):
-                if suite.is_file():
-                    names.update(node_test_names(suite))
         inventory[name] = PackageInfo(
             description=_package_description(package.declaration), tests=sorted(names)
         )
@@ -398,7 +395,7 @@ def _snapshot_inventory(
     files: list[tuple[str, str, Path]],
     *,
     working_tree: bool = False,
-) -> dict[str, PackageInfo]:
+) -> tuple[str, dict[str, PackageInfo]]:
     """Inspect tracked sources in a temporary directory without checkout filters."""
     with tempfile.TemporaryDirectory(prefix="test-explorer-diff-") as directory:
         snapshot = Path(directory)
@@ -432,16 +429,18 @@ def _snapshot_inventory(
                     target.symlink_to(os.fsdecode(source_bytes))
                 else:
                     target.write_bytes(source_bytes)
-        return inspect_packages(snapshot) if (snapshot / "flake.nix").is_file() else {}
+        if not (snapshot / "flake.nix").is_file():
+            return "", {}
+        return flake_description(snapshot), inspect_packages(snapshot)
 
 
-def diff_repository(root: Path) -> list[PackageChange]:
-    """List package and test-name changes from the index to the working tree."""
+def compare_repository(root: Path) -> RepositoryDiff:
+    """Compare the displayed inventory from the index to the working tree."""
     files = diff_inputs(root)
     if not files:
-        return []
-    before = _snapshot_inventory(root, files)
-    after = _snapshot_inventory(root, files, working_tree=True)
+        return RepositoryDiff(description_changed=False, packages=[])
+    old_description, before = _snapshot_inventory(root, files)
+    new_description, after = _snapshot_inventory(root, files, working_tree=True)
     changes: list[PackageChange] = []
     for package, info in sorted((before | after).items()):
         previous = before.get(package)
@@ -465,4 +464,6 @@ def diff_repository(root: Path) -> list[PackageChange]:
                 removed=sorted(old_names - new_names),
             )
         )
-    return changes
+    return RepositoryDiff(
+        description_changed=new_description != old_description, packages=changes
+    )

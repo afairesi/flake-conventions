@@ -60,7 +60,6 @@ pkgs.runCommand "afairesi-consumer-contract"
       consumer.checks.${system}.test_main
       consumer.formatter.${system}
       pkgs.git
-      pkgs.shfmt
     ];
   }
   ''

@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, pname, ... }:
 let
   inherit (pkgs.stdenv) hostPlatform;
   hashes = {
@@ -8,6 +8,7 @@ let
   };
 in
 pkgs.stdenv.mkDerivation rec {
+  inherit pname;
   buildInputs = pkgs.lib.optionals hostPlatform.isLinux [ pkgs.stdenv.cc.cc.lib ];
   doInstallCheck = true;
   installPhase = ''
@@ -25,7 +26,6 @@ pkgs.stdenv.mkDerivation rec {
     pkgs.bats
     pkgs.versionCheckHook
   ];
-  pname = baseNameOf ./.;
   postInstallCheck = ''
     bats ${./test_main.bats}
   '';

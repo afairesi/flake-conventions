@@ -1,7 +1,7 @@
 { pkgs, pname, ... }:
 pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   inherit pname;
-  cargoHash = "sha256-YXOCy2tgOYFeGqbOfPMlMHBIy3g2pBIEov+UYzq9030=";
+  cargoHash = "sha256-0bBYzWIijkFOt77WgU4lRX3w1SZks3buk2tE4LhkQhw=";
   doInstallCheck = true;
   env = pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
     JEMALLOC_SYS_WITH_LG_PAGE = 16;
@@ -15,7 +15,7 @@ pkgs.rustPlatform.buildRustPackage (finalAttrs: {
   nativeInstallCheckInputs = [ pkgs.versionCheckHook ];
   src = pkgs.fetchPypi {
     inherit (finalAttrs) pname version;
-    hash = "sha256-Os4fDWYzuLrtW4yvawpJ17mNMmDNtLmmvGltbJWlczM=";
+    hash = "sha256-rSqCbcXhXjBRlWOyr4IzgRF+AWMYTKXr2geEVEHXej4=";
   };
-  version = "0.5.1";
+  version = "0.6.1";
 })

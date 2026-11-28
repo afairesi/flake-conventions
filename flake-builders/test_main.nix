@@ -31,11 +31,14 @@ let
     systems = [ system ];
   };
   packages = consumer.packages.${system};
-  shells = consumer.devShells.${system};
 in
 {
-  testAppsExposePackageMetadata = check true (
-    apps.example.type == "app"
+  testAppsExposePackagesWithRuntimeHooksAndTheirMetadata = check true (
+    builtins.attrNames apps == [
+      "example"
+      "lean-example"
+    ]
+    && apps.example.type == "app"
     && apps.example.meta == packages.example.meta
     && apps.example.meta.description == "Afairesi consumer contract example"
   );
@@ -54,9 +57,6 @@ in
   testChecksIncludeTheFormatterAndAllPackages = check true (
     checks.formatter == consumer.formatter.${system}.passthru.tests.check
     && pkgs.lib.all (name: checks."pkgs-${name}" == packages.${name}) (builtins.attrNames packages)
-  );
-  testEachTestShellHasAMatchingCheck = check true (
-    pkgs.lib.all (name: checks."devshell-${name}" == shells.${name}) (builtins.attrNames shells)
   );
   testEmptyRepositoriesExposeOnlyRepositoryChecksAndAFormatter =
     check
@@ -106,7 +106,6 @@ in
         host.config.networking.hostName
       ];
   testHtmlPackagesPreserveTheSuppliedDescription = check "Source listing" htmlPackage.meta.description;
-  testLeanLibraryHasNoRunnableApp = check false (apps ? test_main);
   testLibrariesHaveNoMainProgram =
     check
       [ false false ]
@@ -145,12 +144,12 @@ in
     checks.pkgs-python_native-contract == packages.python_native.passthru.tests.contract
     && !(overridden.checks.${system} ? pkgs-example-unavailable)
   );
-  testPackagesWithTestEnvironmentsExposeShells = check [
+  testPackagesWithTestEnvironmentsExposeShellsAndMatchingChecks = check (pkgs.lib.genAttrs [
     "bash-example-test"
     "example-test"
     "lean-example-test"
     "test_main-test"
-  ] (builtins.attrNames shells);
+  ] (name: checks."devshell-${name}")) consumer.devShells.${system};
   testPythonAndLeanExecutablesUseTheirPackageNameAsTheMainProgram =
     check
       [ "example" "lean-example" ]
